@@ -335,54 +335,132 @@ func (s *Server) executePipeline(config *parser.PipelineConfig, workspaceDir str
 				}
 			}
 
-			// Pull the image
-			log.Printf("Pulling image: %s", job.Image)
-			if err := s.docker.PullImage(job.Image); err != nil {
-				log.Printf("Failed to pull image %s: %v", job.Image, err)
-				if s.db != nil && jobID > 0 {
-					exitCode := 1
-					s.db.UpdateJobStatus(jobID, "failed", &exitCode)
+			// Handle different job types
+			if job.Type == "docker-deploy" {
+				// === Docker Deploy Job ===
+				log.Printf("Executing Docker Deploy for %s", jobName)
+
+				// Pull image first
+				if err := s.docker.PullImage(job.Image); err != nil {
+					log.Printf("Failed to pull image %s: %v", job.Image, err)
+					if s.db != nil && jobID > 0 {
+						exitCode := 1
+						s.db.UpdateJobStatus(jobID, "failed", &exitCode)
+					}
+					pipelineSuccess = false
+					continue
 				}
-				pipelineSuccess = false
-				continue
-			}
 
-			// Run the job with workspace mounted
-			containerID, err := s.docker.RunJobWithVolume(job.Image, job.Script, workspaceDir)
-			if err != nil {
-				log.Printf("Failed to start job %s: %v", jobName, err)
-				if s.db != nil && jobID > 0 {
-					exitCode := 1
-					s.db.UpdateJobStatus(jobID, "failed", &exitCode)
-				}
-				pipelineSuccess = false
-				continue
-			}
+				containerName := job.Properties["container_name"]
+				portMapping := job.Properties["port"]
 
-			// Collect and store logs
-			s.collectLogs(containerID, jobID)
+				err := s.docker.DeploySingleContainer(job.Image, containerName, portMapping)
 
-			// Wait for container to finish
-			statusCode, err := s.docker.WaitForContainer(containerID)
-			if err != nil {
-				log.Printf("Error waiting for container: %v", err)
-			}
-
-			// Update job status
-			exitCode := int(statusCode)
-			if s.db != nil && jobID > 0 {
+				exitCode := 0
 				status := "success"
-				if statusCode != 0 {
+				if err != nil {
+					log.Printf("Deploy failed: %v", err)
+					exitCode = 1
 					status = "failed"
+					pipelineSuccess = false
 				}
-				s.db.UpdateJobStatus(jobID, status, &exitCode)
-			}
 
-			if statusCode != 0 {
-				log.Printf("Job %s failed with exit code %d", jobName, statusCode)
-				pipelineSuccess = false
-				// Stop pipeline on first failure
-				return false
+				if s.db != nil && jobID > 0 {
+					s.db.UpdateJobStatus(jobID, status, &exitCode)
+				}
+
+				if !pipelineSuccess {
+					return false
+				}
+
+			} else if job.Type == "docker-compose-deploy" {
+				// === Docker Compose Deploy Job ===
+				log.Printf("Executing Docker Compose Deploy for %s", jobName)
+
+				composeFile := job.Properties["file"]
+				if composeFile == "" {
+					composeFile = "docker-compose.yml"
+				}
+				serviceName := job.Properties["service"]
+
+				err := s.docker.DeployCompose(workspaceDir, composeFile, serviceName)
+
+				exitCode := 0
+				status := "success"
+				if err != nil {
+					log.Printf("Compose Deploy failed: %v", err)
+					exitCode = 1
+					status = "failed"
+					pipelineSuccess = false
+				}
+
+				if s.db != nil && jobID > 0 {
+					s.db.UpdateJobStatus(jobID, status, &exitCode)
+				}
+
+				if !pipelineSuccess {
+					return false
+				}
+
+			} else {
+				// === Standard Shell Job ===
+
+				// Pull the image
+				log.Printf("Pulling image: %s", job.Image)
+				if err := s.docker.PullImage(job.Image); err != nil {
+					log.Printf("Failed to pull image %s: %v", job.Image, err)
+					if s.db != nil && jobID > 0 {
+						exitCode := 1
+						s.db.UpdateJobStatus(jobID, "failed", &exitCode)
+					}
+					pipelineSuccess = false
+					continue
+				}
+
+				// Define environment variables
+				envVars := []string{
+					fmt.Sprintf("CI_PIPELINE_ID=%d", pipelineID),
+					fmt.Sprintf("CI_JOB_ID=%d", jobID),
+					"CI_PROJECT_DIR=/workspace",
+				}
+
+				// Run the job with workspace mounted
+				containerID, err := s.docker.RunJobWithVolume(job.Image, job.Script, workspaceDir, envVars)
+				if err != nil {
+					log.Printf("Failed to start job %s: %v", jobName, err)
+					if s.db != nil && jobID > 0 {
+						exitCode := 1
+						s.db.UpdateJobStatus(jobID, "failed", &exitCode)
+					}
+					pipelineSuccess = false
+					continue
+				}
+
+				// Collect and store logs
+				s.collectLogs(containerID, jobID)
+
+				// Wait for container to finish
+				statusCode, err := s.docker.WaitForContainer(containerID)
+				if err != nil {
+					log.Printf("Error waiting for container: %v", err)
+				}
+
+				// Update job status
+				exitCode := int(statusCode)
+				if s.db != nil && jobID > 0 {
+					status := "success"
+					if statusCode != 0 {
+						status = "failed"
+					}
+					s.db.UpdateJobStatus(jobID, status, &exitCode)
+				}
+
+				if statusCode != 0 {
+					log.Printf("Job %s failed with exit code %d", jobName, statusCode)
+					pipelineSuccess = false
+					// Stop pipeline on first failure
+					return false
+				}
 			}
 
 			log.Printf("Job %s completed successfully", jobName)

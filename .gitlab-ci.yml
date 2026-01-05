@@ -1,6 +1,7 @@
 stages:
   - build
   - test
+  - deploy
 
 # Simulation de l'étape de compilation (Succès)
 build_job:
