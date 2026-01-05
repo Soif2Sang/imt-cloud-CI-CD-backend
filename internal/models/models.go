@@ -5,15 +5,19 @@ import "time"
 type Project struct {
 	ID        int       `json:"id"`
 	Name      string    `json:"name"`
-	RepoURL   string    `json:"repo_url"`
-	AccessToken string  `json:"access_token"`
-	CreatedAt time.Time `json:"created_at"`
+	RepoURL            string    `json:"repo_url"`
+	AccessToken        string    `json:"access_token"`
+	PipelineFilename   string    `json:"pipeline_filename"`
+	DeploymentFilename string    `json:"deployment_filename"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type NewProject struct {
-	Name        string `json:"name"`
-	RepoURL     string `json:"repo_url"`
-	AccessToken string `json:"access_token"`
+	Name               string `json:"name"`
+	RepoURL            string `json:"repo_url"`
+	AccessToken        string `json:"access_token"`
+	PipelineFilename   string `json:"pipeline_filename"`
+	DeploymentFilename string `json:"deployment_filename"`
 }
 
 type Pipeline struct {

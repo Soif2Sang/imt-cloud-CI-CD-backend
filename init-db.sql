@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL,
     repo_url TEXT NOT NULL UNIQUE,
     access_token TEXT NOT NULL,
+    pipeline_filename TEXT DEFAULT 'pipeline.yml',
+    deployment_filename TEXT DEFAULT 'docker-compose.yml',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

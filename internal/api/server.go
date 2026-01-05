@@ -4,12 +4,15 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/docker/docker/pkg/stdcopy"
 
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/database"
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/executor"
@@ -21,7 +24,7 @@ import (
 // Server represents the API server
 type Server struct {
 	db     *database.DB
-	docker *executor.Executor
+	docker *executor.DockerExecutor
 	port   string
 }
 
@@ -186,6 +189,8 @@ func (s *Server) runPipeline(pushEvent PushEvent, branch, commitHash string) {
 	// Find or create project in database
 	var projectID int
 	var accessToken string
+	var pipelineFilename string
+	var deploymentFilename string
 
 	if s.db != nil {
 		project, err := s.findOrCreateProject(pushEvent.Repository)
@@ -194,7 +199,16 @@ func (s *Server) runPipeline(pushEvent PushEvent, branch, commitHash string) {
 		} else {
 			projectID = project.ID
 			accessToken = project.AccessToken
+			pipelineFilename = project.PipelineFilename
+			deploymentFilename = project.DeploymentFilename
 		}
+	}
+
+	if pipelineFilename == "" {
+		pipelineFilename = ".gitlab-ci.yml"
+	}
+	if deploymentFilename == "" {
+		deploymentFilename = "docker-compose.yml"
 	}
 
 	// Create pipeline record
@@ -224,9 +238,9 @@ func (s *Server) runPipeline(pushEvent PushEvent, branch, commitHash string) {
 	defer git.Cleanup(workspaceDir)
 
 	// Find and parse the CI config file
-	configPath := s.findCIConfig(workspaceDir)
-	if configPath == "" {
-		log.Printf("No CI config file found in repository")
+	configPath := filepath.Join(workspaceDir, pipelineFilename)
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		log.Printf("CI config file not found at %s", configPath)
 		if s.db != nil && pipelineID > 0 {
 			s.db.UpdatePipelineStatus(pipelineID, "failed")
 		}
@@ -250,6 +264,18 @@ func (s *Server) runPipeline(pushEvent PushEvent, branch, commitHash string) {
 
 	// Execute the pipeline
 	pipelineSuccess := s.executePipeline(config, workspaceDir, pipelineID)
+
+	// Deploy if successful
+	if pipelineSuccess {
+		log.Printf("Pipeline successful. Starting deployment using %s...", deploymentFilename)
+		sanitizedRepoName := sanitizeProjectName(repoName)
+		if err := s.docker.DeployCompose(workspaceDir, deploymentFilename, sanitizedRepoName, ""); err != nil {
+			log.Printf("Deployment failed: %v", err)
+			pipelineSuccess = false
+		} else {
+			log.Printf("Deployment successful!")
+		}
+	}
 
 	// Update final pipeline status
 	if s.db != nil && pipelineID > 0 {
@@ -287,28 +313,6 @@ func (s *Server) findOrCreateProject(repo Repository) (*models.Project, error) {
 	return s.db.CreateProject(newProject)
 }
 
-// findCIConfig looks for CI configuration files in the workspace
-func (s *Server) findCIConfig(workspaceDir string) string {
-	// List of possible CI config file names
-	configFiles := []string{
-		".gitlab-ci.yml",
-		".gitlab-ci.yaml",
-		"gitlab-ci.yml",
-		"gitlab-ci.yaml",
-		".ci.yml",
-		".ci.yaml",
-	}
-
-	for _, file := range configFiles {
-		path := filepath.Join(workspaceDir, file)
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-
-	return ""
-}
-
 // executePipeline runs all jobs in the pipeline
 func (s *Server) executePipeline(config *parser.PipelineConfig, workspaceDir string, pipelineID int) bool {
 	pipelineSuccess := true
@@ -335,132 +339,61 @@ func (s *Server) executePipeline(config *parser.PipelineConfig, workspaceDir str
 				}
 			}
 
-			// Handle different job types
-			if job.Type == "docker-deploy" {
-				// === Docker Deploy Job ===
-				log.Printf("Executing Docker Deploy for %s", jobName)
-
-				// Pull image first
-				if err := s.docker.PullImage(job.Image); err != nil {
-					log.Printf("Failed to pull image %s: %v", job.Image, err)
-					if s.db != nil && jobID > 0 {
-						exitCode := 1
-						s.db.UpdateJobStatus(jobID, "failed", &exitCode)
-					}
-					pipelineSuccess = false
-					continue
+			// Pull the image
+			log.Printf("Pulling image: %s", job.Image)
+			if err := s.docker.PullImage(job.Image); err != nil {
+				log.Printf("Failed to pull image %s: %v", job.Image, err)
+				if s.db != nil && jobID > 0 {
+					exitCode := 1
+					s.db.UpdateJobStatus(jobID, "failed", &exitCode)
 				}
+				pipelineSuccess = false
+				continue
+			}
 
-				containerName := job.Properties["container_name"]
-				portMapping := job.Properties["port"]
+			// Define environment variables
+			envVars := []string{
+				fmt.Sprintf("CI_PIPELINE_ID=%d", pipelineID),
+				fmt.Sprintf("CI_JOB_ID=%d", jobID),
+				"CI_PROJECT_DIR=/workspace",
+			}
 
-				err := s.docker.DeploySingleContainer(job.Image, containerName, portMapping)
+			// Run the job with workspace mounted
+			containerID, err := s.docker.RunJobWithVolume(job.Image, job.Script, workspaceDir, envVars)
+			if err != nil {
+				log.Printf("Failed to start job %s: %v", jobName, err)
+				if s.db != nil && jobID > 0 {
+					exitCode := 1
+					s.db.UpdateJobStatus(jobID, "failed", &exitCode)
+				}
+				pipelineSuccess = false
+				continue
+			}
 
-				exitCode := 0
+			// Collect and store logs
+			s.collectLogs(containerID, jobID)
+
+			// Wait for container to finish
+			statusCode, err := s.docker.WaitForContainer(containerID)
+			if err != nil {
+				log.Printf("Error waiting for container: %v", err)
+			}
+
+			// Update job status
+			exitCode := int(statusCode)
+			if s.db != nil && jobID > 0 {
 				status := "success"
-				if err != nil {
-					log.Printf("Deploy failed: %v", err)
-					exitCode = 1
-					status = "failed"
-					pipelineSuccess = false
-				}
-
-				if s.db != nil && jobID > 0 {
-					s.db.UpdateJobStatus(jobID, status, &exitCode)
-				}
-
-				if !pipelineSuccess {
-					return false
-				}
-
-			} else if job.Type == "docker-compose-deploy" {
-				// === Docker Compose Deploy Job ===
-				log.Printf("Executing Docker Compose Deploy for %s", jobName)
-
-				composeFile := job.Properties["file"]
-				if composeFile == "" {
-					composeFile = "docker-compose.yml"
-				}
-				serviceName := job.Properties["service"]
-
-				err := s.docker.DeployCompose(workspaceDir, composeFile, serviceName)
-
-				exitCode := 0
-				status := "success"
-				if err != nil {
-					log.Printf("Compose Deploy failed: %v", err)
-					exitCode = 1
-					status = "failed"
-					pipelineSuccess = false
-				}
-
-				if s.db != nil && jobID > 0 {
-					s.db.UpdateJobStatus(jobID, status, &exitCode)
-				}
-
-				if !pipelineSuccess {
-					return false
-				}
-
-			} else {
-				// === Standard Shell Job ===
-
-				// Pull the image
-				log.Printf("Pulling image: %s", job.Image)
-				if err := s.docker.PullImage(job.Image); err != nil {
-					log.Printf("Failed to pull image %s: %v", job.Image, err)
-					if s.db != nil && jobID > 0 {
-						exitCode := 1
-						s.db.UpdateJobStatus(jobID, "failed", &exitCode)
-					}
-					pipelineSuccess = false
-					continue
-				}
-
-				// Define environment variables
-				envVars := []string{
-					fmt.Sprintf("CI_PIPELINE_ID=%d", pipelineID),
-					fmt.Sprintf("CI_JOB_ID=%d", jobID),
-					"CI_PROJECT_DIR=/workspace",
-				}
-
-				// Run the job with workspace mounted
-				containerID, err := s.docker.RunJobWithVolume(job.Image, job.Script, workspaceDir, envVars)
-				if err != nil {
-					log.Printf("Failed to start job %s: %v", jobName, err)
-					if s.db != nil && jobID > 0 {
-						exitCode := 1
-						s.db.UpdateJobStatus(jobID, "failed", &exitCode)
-					}
-					pipelineSuccess = false
-					continue
-				}
-
-				// Collect and store logs
-				s.collectLogs(containerID, jobID)
-
-				// Wait for container to finish
-				statusCode, err := s.docker.WaitForContainer(containerID)
-				if err != nil {
-					log.Printf("Error waiting for container: %v", err)
-				}
-
-				// Update job status
-				exitCode := int(statusCode)
-				if s.db != nil && jobID > 0 {
-					status := "success"
-					if statusCode != 0 {
-						status = "failed"
-					}
-					s.db.UpdateJobStatus(jobID, status, &exitCode)
-				}
-
 				if statusCode != 0 {
-					log.Printf("Job %s failed with exit code %d", jobName, statusCode)
-					pipelineSuccess = false
-					// Stop pipeline on first failure
-					return false
+					status = "failed"
 				}
+				s.db.UpdateJobStatus(jobID, status, &exitCode)
+			}
+
+			if statusCode != 0 {
+				log.Printf("Job %s failed with exit code %d", jobName, statusCode)
+				pipelineSuccess = false
+				// Stop pipeline on first failure
+				return false
 			}
 
 			log.Printf("Job %s completed successfully", jobName)
@@ -479,17 +412,26 @@ func (s *Server) collectLogs(containerID string, jobID int) {
 	}
 	defer reader.Close()
 
-	scanner := bufio.NewScanner(reader)
+	// Use a pipe to connect stdcopy (writer) to scanner (reader)
+	pr, pw := io.Pipe()
+
+	// Run stdcopy in a goroutine to demultiplex the docker stream
+	go func() {
+		// We write both stdout and stderr to the same pipe
+		if _, err := stdcopy.StdCopy(pw, pw, reader); err != nil {
+			log.Printf("Error demultiplexing logs: %v", err)
+		}
+		pw.Close()
+	}()
+
+	scanner := bufio.NewScanner(pr)
 	var logBatch []string
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Docker log stream has 8-byte header, try to clean it
-		cleanLine := line
-		if len(line) > 8 {
-			cleanLine = strings.TrimRight(line[8:], "\x00")
-		}
+		// Sanitize line: remove null bytes (Postgres doesn't allow them in text)
+		cleanLine := strings.ReplaceAll(line, "\x00", "")
 
 		if cleanLine == "" {
 			continue

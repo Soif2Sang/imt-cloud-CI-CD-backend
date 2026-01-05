@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -33,6 +36,14 @@ func parseIDFromPath(path string, segment int) (int, error) {
 		return 0, strconv.ErrSyntax
 	}
 	return strconv.Atoi(parts[segment])
+}
+
+// sanitizeProjectName sanitizes the project name for Docker Compose
+func sanitizeProjectName(name string) string {
+	name = strings.ToLower(name)
+	reg := regexp.MustCompile("[^a-z0-9]+")
+	name = reg.ReplaceAllString(name, "-")
+	return strings.Trim(name, "-")
 }
 
 // === Projects Handlers ===
@@ -529,9 +540,19 @@ func (s *Server) cloneAndRunPipeline(project *models.Project, pipeline *models.P
 	}
 	defer s.cleanupWorkspace(workspaceDir)
 
+	pipelineFilename := project.PipelineFilename
+	if pipelineFilename == "" {
+		pipelineFilename = ".gitlab-ci.yml"
+	}
+	deploymentFilename := project.DeploymentFilename
+	if deploymentFilename == "" {
+		deploymentFilename = "docker-compose.yml"
+	}
+
 	// Find CI config
-	configPath := s.findCIConfig(workspaceDir)
-	if configPath == "" {
+	configPath := filepath.Join(workspaceDir, pipelineFilename)
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		log.Printf("CI config file not found at %s", configPath)
 		return nil
 	}
 
@@ -542,8 +563,18 @@ func (s *Server) cloneAndRunPipeline(project *models.Project, pipeline *models.P
 	}
 
 	success := s.executePipeline(config, workspaceDir, pipeline.ID)
+
+	// Deploy if successful
 	if success {
-		s.db.UpdatePipelineStatus(pipeline.ID, "success")
+		log.Printf("Pipeline successful. Starting deployment using %s...", deploymentFilename)
+		sanitizedProjectName := sanitizeProjectName(project.Name)
+		if err := s.docker.DeployCompose(workspaceDir, deploymentFilename, sanitizedProjectName, ""); err != nil {
+			log.Printf("Deployment failed: %v", err)
+			s.db.UpdatePipelineStatus(pipeline.ID, "failed")
+		} else {
+			log.Printf("Deployment successful!")
+			s.db.UpdatePipelineStatus(pipeline.ID, "success")
+		}
 	} else {
 		s.db.UpdatePipelineStatus(pipeline.ID, "failed")
 	}

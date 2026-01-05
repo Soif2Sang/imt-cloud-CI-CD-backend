@@ -50,14 +50,22 @@ func (db *DB) Close() error {
 
 // CreateProject creates a new project in the database
 func (db *DB) CreateProject(project *models.NewProject) (*models.Project, error) {
+	// Set defaults if empty
+	if project.PipelineFilename == "" {
+		project.PipelineFilename = "pipeline.yml"
+	}
+	if project.DeploymentFilename == "" {
+		project.DeploymentFilename = "docker-compose.yml"
+	}
+
 	query := `
-		INSERT INTO projects (name, repo_url, access_token)
-		VALUES ($1, $2, $3)
-		RETURNING id, name, repo_url, access_token, created_at
+		INSERT INTO projects (name, repo_url, access_token, pipeline_filename, deployment_filename)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, name, repo_url, access_token, pipeline_filename, deployment_filename, created_at
 	`
 	var p models.Project
-	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken).
-		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.CreatedAt)
+	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename).
+		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project: %w", err)
 	}
@@ -66,10 +74,10 @@ func (db *DB) CreateProject(project *models.NewProject) (*models.Project, error)
 
 // GetProject retrieves a project by ID
 func (db *DB) GetProject(id int) (*models.Project, error) {
-	query := `SELECT id, name, repo_url, access_token, created_at FROM projects WHERE id = $1`
+	query := `SELECT id, name, repo_url, access_token, pipeline_filename, deployment_filename, created_at FROM projects WHERE id = $1`
 	var p models.Project
 	err := db.conn.QueryRow(query, id).
-		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.CreatedAt)
+		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename, &p.CreatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("project not found")
@@ -81,7 +89,7 @@ func (db *DB) GetProject(id int) (*models.Project, error) {
 
 // GetAllProjects retrieves all projects
 func (db *DB) GetAllProjects() ([]models.Project, error) {
-	query := `SELECT id, name, repo_url, access_token, created_at FROM projects ORDER BY created_at DESC`
+	query := `SELECT id, name, repo_url, access_token, pipeline_filename, deployment_filename, created_at FROM projects ORDER BY created_at DESC`
 	rows, err := db.conn.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query projects: %w", err)
@@ -91,7 +99,7 @@ func (db *DB) GetAllProjects() ([]models.Project, error) {
 	var projects []models.Project
 	for rows.Next() {
 		var p models.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename, &p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan project: %w", err)
 		}
 		projects = append(projects, p)
@@ -101,15 +109,23 @@ func (db *DB) GetAllProjects() ([]models.Project, error) {
 
 // UpdateProject updates an existing project
 func (db *DB) UpdateProject(id int, project *models.NewProject) (*models.Project, error) {
+	// Set defaults if empty
+	if project.PipelineFilename == "" {
+		project.PipelineFilename = ".gitlab-ci.yml"
+	}
+	if project.DeploymentFilename == "" {
+		project.DeploymentFilename = "docker-compose.yml"
+	}
+
 	query := `
 		UPDATE projects 
-		SET name = $1, repo_url = $2, access_token = $3
-		WHERE id = $4
-		RETURNING id, name, repo_url, access_token, created_at
+		SET name = $1, repo_url = $2, access_token = $3, pipeline_filename = $4, deployment_filename = $5
+		WHERE id = $6
+		RETURNING id, name, repo_url, access_token, pipeline_filename, deployment_filename, created_at
 	`
 	var p models.Project
-	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken, id).
-		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.CreatedAt)
+	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename, id).
+		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update project: %w", err)
 	}
