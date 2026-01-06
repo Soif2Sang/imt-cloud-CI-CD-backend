@@ -9,6 +9,11 @@ type Project struct {
 	AccessToken        string    `json:"access_token"`
 	PipelineFilename   string    `json:"pipeline_filename"`
 	DeploymentFilename string    `json:"deployment_filename"`
+	SSHHost            string    `json:"ssh_host"`
+	SSHUser            string    `json:"ssh_user"`
+	SSHPrivateKey      string    `json:"ssh_private_key"`
+	RegistryUser       string    `json:"registry_user"`
+	RegistryToken   string    `json:"registry_token"`
 	CreatedAt          time.Time `json:"created_at"`
 }
 
@@ -18,6 +23,11 @@ type NewProject struct {
 	AccessToken        string `json:"access_token"`
 	PipelineFilename   string `json:"pipeline_filename"`
 	DeploymentFilename string `json:"deployment_filename"`
+	SSHHost            string `json:"ssh_host"`
+	SSHUser            string `json:"ssh_user"`
+	SSHPrivateKey      string `json:"ssh_private_key"`
+	RegistryUser       string `json:"registry_user"`
+	RegistryToken   string `json:"registry_token"`
 }
 
 type Pipeline struct {
@@ -73,6 +83,11 @@ type PipelineRunParams struct {
 	AccessToken        string
 	PipelineFilename   string
 	DeploymentFilename string
+	SSHHost            string
+	SSHUser            string
+	SSHPrivateKey      string
+	RegistryUser       string
+	RegistryToken   string
 	ProjectID          int
 	PipelineID         int
 }

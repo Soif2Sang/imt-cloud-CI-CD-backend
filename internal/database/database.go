@@ -59,13 +59,15 @@ func (db *DB) CreateProject(project *models.NewProject) (*models.Project, error)
 	}
 
 	query := `
-		INSERT INTO projects (name, repo_url, access_token, pipeline_filename, deployment_filename)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, name, repo_url, access_token, pipeline_filename, deployment_filename, created_at
+		INSERT INTO projects (name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, created_at
 	`
 	var p models.Project
-	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename).
-		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename, &p.CreatedAt)
+	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename,
+		project.SSHHost, project.SSHUser, project.SSHPrivateKey, project.RegistryUser, project.RegistryToken).
+		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
+			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project: %w", err)
 	}
@@ -74,10 +76,18 @@ func (db *DB) CreateProject(project *models.NewProject) (*models.Project, error)
 
 // GetProject retrieves a project by ID
 func (db *DB) GetProject(id int) (*models.Project, error) {
-	query := `SELECT id, name, repo_url, access_token, pipeline_filename, deployment_filename, created_at FROM projects WHERE id = $1`
+	query := `
+		SELECT id, name, repo_url, access_token, pipeline_filename, deployment_filename,
+		COALESCE(ssh_host, ''), COALESCE(ssh_user, ''), COALESCE(ssh_private_key, ''),
+		COALESCE(registry_user, ''), COALESCE(registry_token, ''),
+		created_at
+		FROM projects WHERE id = $1
+	`
 	var p models.Project
 	err := db.conn.QueryRow(query, id).
-		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename, &p.CreatedAt)
+		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
+			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken,
+			&p.CreatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("project not found")
@@ -89,7 +99,13 @@ func (db *DB) GetProject(id int) (*models.Project, error) {
 
 // GetAllProjects retrieves all projects
 func (db *DB) GetAllProjects() ([]models.Project, error) {
-	query := `SELECT id, name, repo_url, access_token, pipeline_filename, deployment_filename, created_at FROM projects ORDER BY created_at DESC`
+	query := `
+		SELECT id, name, repo_url, access_token, pipeline_filename, deployment_filename,
+		COALESCE(ssh_host, ''), COALESCE(ssh_user, ''), COALESCE(ssh_private_key, ''),
+		COALESCE(registry_user, ''), COALESCE(registry_token, ''),
+		created_at
+		FROM projects ORDER BY created_at DESC
+	`
 	rows, err := db.conn.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query projects: %w", err)
@@ -99,7 +115,9 @@ func (db *DB) GetAllProjects() ([]models.Project, error) {
 	var projects []models.Project
 	for rows.Next() {
 		var p models.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
+			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken,
+			&p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan project: %w", err)
 		}
 		projects = append(projects, p)
@@ -118,14 +136,17 @@ func (db *DB) UpdateProject(id int, project *models.NewProject) (*models.Project
 	}
 
 	query := `
-		UPDATE projects 
-		SET name = $1, repo_url = $2, access_token = $3, pipeline_filename = $4, deployment_filename = $5
-		WHERE id = $6
-		RETURNING id, name, repo_url, access_token, pipeline_filename, deployment_filename, created_at
+		UPDATE projects
+		SET name = $1, repo_url = $2, access_token = $3, pipeline_filename = $4, deployment_filename = $5,
+		ssh_host = $6, ssh_user = $7, ssh_private_key = $8, registry_user = $9, registry_token = $10
+		WHERE id = $11
+		RETURNING id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, created_at
 	`
 	var p models.Project
-	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename, id).
-		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename, &p.CreatedAt)
+	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename,
+		project.SSHHost, project.SSHUser, project.SSHPrivateKey, project.RegistryUser, project.RegistryToken, id).
+		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
+			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update project: %w", err)
 	}
@@ -197,9 +218,9 @@ func (db *DB) GetPipeline(id int) (*models.Pipeline, error) {
 // GetPipelinesByProject retrieves all pipelines for a project
 func (db *DB) GetPipelinesByProject(projectID int) ([]models.Pipeline, error) {
 	query := `
-		SELECT id, project_id, status, commit_hash, branch, created_at, finished_at 
-		FROM pipelines 
-		WHERE project_id = $1 
+		SELECT id, project_id, status, commit_hash, branch, created_at, finished_at
+		FROM pipelines
+		WHERE project_id = $1
 		ORDER BY created_at DESC
 	`
 	rows, err := db.conn.Query(query, projectID)
@@ -303,9 +324,9 @@ func (db *DB) GetJob(id int) (*models.Job, error) {
 // GetJobsByPipeline retrieves all jobs for a pipeline
 func (db *DB) GetJobsByPipeline(pipelineID int) ([]models.Job, error) {
 	query := `
-		SELECT id, pipeline_id, name, stage, image, status, exit_code, started_at, finished_at 
-		FROM jobs 
-		WHERE pipeline_id = $1 
+		SELECT id, pipeline_id, name, stage, image, status, exit_code, started_at, finished_at
+		FROM jobs
+		WHERE pipeline_id = $1
 		ORDER BY id ASC
 	`
 	rows, err := db.conn.Query(query, pipelineID)
@@ -411,9 +432,9 @@ func (db *DB) CreateLogBatch(jobID int, contents []string) error {
 // GetLogsByJob retrieves all logs for a job
 func (db *DB) GetLogsByJob(jobID int) ([]models.LogLine, error) {
 	query := `
-		SELECT id, job_id, content, created_at 
-		FROM job_logs 
-		WHERE job_id = $1 
+		SELECT id, job_id, content, created_at
+		FROM job_logs
+		WHERE job_id = $1
 		ORDER BY created_at ASC, id ASC
 	`
 	rows, err := db.conn.Query(query, jobID)
@@ -436,8 +457,8 @@ func (db *DB) GetLogsByJob(jobID int) ([]models.LogLine, error) {
 // GetLogsSince retrieves logs for a job since a given timestamp (for streaming)
 func (db *DB) GetLogsSince(jobID int, since time.Time) ([]models.LogLine, error) {
 	query := `
-		SELECT id, job_id, content, created_at 
-		FROM job_logs 
+		SELECT id, job_id, content, created_at
+		FROM job_logs
 		WHERE job_id = $1 AND created_at > $2
 		ORDER BY created_at ASC, id ASC
 	`
@@ -523,9 +544,9 @@ func (db *DB) CreateDeploymentLog(pipelineID int, content string) error {
 // GetDeploymentLogs retrieves all logs for a deployment (via pipeline_id)
 func (db *DB) GetDeploymentLogs(pipelineID int) ([]models.DeploymentLog, error) {
 	query := `
-		SELECT id, pipeline_id, content, created_at 
-		FROM deployment_logs 
-		WHERE pipeline_id = $1 
+		SELECT id, pipeline_id, content, created_at
+		FROM deployment_logs
+		WHERE pipeline_id = $1
 		ORDER BY created_at ASC, id ASC
 	`
 	rows, err := db.conn.Query(query, pipelineID)

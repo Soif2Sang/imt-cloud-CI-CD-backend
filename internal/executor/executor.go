@@ -2,6 +2,8 @@ package executor
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
@@ -11,12 +13,14 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
 )
 
 type DockerExecutor struct {
-	cli *client.Client
-	ctx context.Context
+	cli        *client.Client
+	ctx        context.Context
+	authConfig string
 }
 
 func NewDockerExecutor() (*DockerExecutor, error) {
@@ -40,6 +44,88 @@ func (e *DockerExecutor) PullImage(imageName string) error {
 	// On lit le flux jusqu'au bout pour attendre la fin du pull
 	_, err = io.Copy(io.Discard, reader)
 	return err
+}
+
+func (e *DockerExecutor) Login(username, password, serverAddress string) error {
+	authConfig := registry.AuthConfig{
+		Username:      username,
+		Password:      password,
+		ServerAddress: serverAddress,
+	}
+
+	encodedJSON, err := json.Marshal(authConfig)
+	if err != nil {
+		return err
+	}
+
+	authStr := base64.URLEncoding.EncodeToString(encodedJSON)
+
+	_, err = e.cli.RegistryLogin(e.ctx, authConfig)
+	if err != nil {
+		return err
+	}
+
+	e.authConfig = authStr
+
+	// Also login via CLI for docker compose commands
+	cmd := exec.Command("docker", "login", "-u", username, "--password-stdin", serverAddress)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	go func() {
+		defer stdin.Close()
+		io.WriteString(stdin, password)
+	}()
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker cli login failed: %s - %w", string(out), err)
+	}
+
+	return nil
+}
+
+func (e *DockerExecutor) PushImage(imageName string) error {
+	opts := image.PushOptions{}
+	if e.authConfig != "" {
+		opts.RegistryAuth = e.authConfig
+	}
+
+	reader, err := e.cli.ImagePush(e.ctx, imageName, opts)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	_, err = io.Copy(io.Discard, reader)
+	return err
+}
+
+// ComposeBuild builds the services defined in docker-compose.yml
+func (e *DockerExecutor) ComposeBuild(workDir, composeFile, overrideFile string) (string, error) {
+	args := []string{"compose", "-f", composeFile}
+	if overrideFile != "" {
+		args = append(args, "-f", overrideFile)
+	}
+	args = append(args, "build")
+
+	cmd := exec.Command("docker", args...)
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+// ComposePush pushes the services defined in docker-compose.yml
+func (e *DockerExecutor) ComposePush(workDir, composeFile, overrideFile string) (string, error) {
+	args := []string{"compose", "-f", composeFile}
+	if overrideFile != "" {
+		args = append(args, "-f", overrideFile)
+	}
+	args = append(args, "push")
+
+	cmd := exec.Command("docker", args...)
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+	return string(output), err
 }
 
 // RunJobWithVolume runs a job with a workspace directory mounted into the container

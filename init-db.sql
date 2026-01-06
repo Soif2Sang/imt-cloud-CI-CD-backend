@@ -1,5 +1,9 @@
 -- PostgreSQL initialization script for CI/CD backend
 
+-- SonarQube database configuration
+CREATE USER sonar WITH PASSWORD 'sonar';
+CREATE DATABASE sonar OWNER sonar;
+
 -- Table des projets (Repositories)
 CREATE TABLE IF NOT EXISTS projects (
     id SERIAL PRIMARY KEY,
@@ -8,6 +12,11 @@ CREATE TABLE IF NOT EXISTS projects (
     access_token TEXT NOT NULL,
     pipeline_filename TEXT DEFAULT 'pipeline.yml',
     deployment_filename TEXT DEFAULT 'docker-compose.yml',
+    ssh_host TEXT,
+    ssh_user TEXT,
+    ssh_private_key TEXT,
+    registry_user TEXT,
+    registry_token TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
