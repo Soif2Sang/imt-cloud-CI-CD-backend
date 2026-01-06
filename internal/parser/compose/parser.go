@@ -40,10 +40,10 @@ func ParseServices(path string) ([]string, error) {
 func GenerateOverride(services []string, registryUser, projectName, tag string) ([]byte, error) {
 	serviceConfig := make(map[string]interface{})
 
-	cleanProject := strings.ToLower(projectName)
+	cleanProject := strings.ToLower(strings.ReplaceAll(projectName, " ", "-"))
 
 	for _, service := range services {
-		cleanService := strings.ToLower(service)
+		cleanService := strings.ToLower(strings.ReplaceAll(service, " ", "-"))
 
 		// Construct standardized image name
 		// e.g. "myuser/myproject-backend:abc1234"
@@ -56,7 +56,6 @@ func GenerateOverride(services []string, registryUser, projectName, tag string) 
 	}
 
 	override := map[string]interface{}{
-		"version":  "3", // Optional but good practice
 		"services": serviceConfig,
 	}
 
