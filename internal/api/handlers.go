@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -60,6 +61,106 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleProject handles /api/v1/projects/{projectId}
+func (s *Server) handleVariables(w http.ResponseWriter, r *http.Request) {
+	projectID, err := parseIDFromPath(r.URL.Path, 3)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid project ID")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.listVariables(w, r, projectID)
+	case http.MethodPost:
+		s.createVariable(w, r, projectID)
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+func (s *Server) listVariables(w http.ResponseWriter, r *http.Request, projectID int) {
+	_, err := getUserIDFromContext(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	variables, err := s.db.GetVariablesByProject(projectID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get variables")
+		return
+	}
+
+	for i := range variables {
+		if variables[i].IsSecret {
+			variables[i].Value = "*****"
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(variables)
+}
+
+func (s *Server) createVariable(w http.ResponseWriter, r *http.Request, projectID int) {
+	_, err := getUserIDFromContext(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	var v models.Variable
+	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	v.ProjectID = projectID
+	if err := s.db.CreateVariable(&v); err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create variable: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) handleVariable(w http.ResponseWriter, r *http.Request) {
+	projectID, err := parseIDFromPath(r.URL.Path, 3)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid project ID")
+		return
+	}
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 6 {
+		respondError(w, http.StatusBadRequest, "Invalid path")
+		return
+	}
+	key := parts[5]
+
+	if r.Method == http.MethodDelete {
+		s.deleteVariable(w, r, projectID, key)
+	} else {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+func (s *Server) deleteVariable(w http.ResponseWriter, r *http.Request, projectID int, key string) {
+	_, err := getUserIDFromContext(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	if err := s.db.DeleteVariable(projectID, key); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to delete variable")
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 	// Extract project ID from path: /api/v1/projects/{projectId}
 	projectID, err := parseIDFromPath(r.URL.Path, 3)

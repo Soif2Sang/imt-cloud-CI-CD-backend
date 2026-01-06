@@ -12,6 +12,15 @@ type User struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+type Variable struct {
+	ID        int       `json:"id"`
+	ProjectID int       `json:"project_id"`
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	IsSecret  bool      `json:"is_secret"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Project struct {
 	ID        int       `json:"id"`
 	OwnerID   int       `json:"owner_id"`
@@ -25,9 +34,8 @@ type Project struct {
 	SSHPrivateKey      string    `json:"ssh_private_key"`
 	RegistryUser       string    `json:"registry_user"`
 	RegistryToken   string    `json:"registry_token"`
-	SonarURL        string    `json:"sonar_url"`
-	SonarToken      string    `json:"sonar_token"`
-	CreatedAt          time.Time `json:"created_at"`
+	Variables       []Variable `json:"variables,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
 }
 
 type NewProject struct {
@@ -42,8 +50,6 @@ type NewProject struct {
 	SSHPrivateKey      string `json:"ssh_private_key"`
 	RegistryUser       string `json:"registry_user"`
 	RegistryToken   string `json:"registry_token"`
-	SonarURL        string `json:"sonar_url"`
-	SonarToken      string `json:"sonar_token"`
 }
 
 type ProjectMember struct {
@@ -112,8 +118,7 @@ type PipelineRunParams struct {
 	SSHPrivateKey      string
 	RegistryUser       string
 	RegistryToken   string
-	SonarURL        string
-	SonarToken      string
+	Variables       []Variable
 	ProjectID          int
 	PipelineID         int
 }

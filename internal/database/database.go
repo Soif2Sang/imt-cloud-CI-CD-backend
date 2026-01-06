@@ -97,15 +97,15 @@ func (db *DB) CreateProject(project *models.NewProject) (*models.Project, error)
 	}
 
 	query := `
-		INSERT INTO projects (owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, sonar_url, sonar_token)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		RETURNING id, owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, sonar_url, sonar_token, created_at
+		INSERT INTO projects (owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, created_at
 	`
 	var p models.Project
 	err := db.conn.QueryRow(query, project.OwnerID, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename,
-		project.SSHHost, project.SSHUser, project.SSHPrivateKey, project.RegistryUser, project.RegistryToken, project.SonarURL, project.SonarToken).
+		project.SSHHost, project.SSHUser, project.SSHPrivateKey, project.RegistryUser, project.RegistryToken).
 		Scan(&p.ID, &p.OwnerID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
-			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken, &p.SonarURL, &p.SonarToken, &p.CreatedAt)
+			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project: %w", err)
 	}
@@ -118,7 +118,6 @@ func (db *DB) GetProject(id int) (*models.Project, error) {
 		SELECT id, owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename,
 		COALESCE(ssh_host, ''), COALESCE(ssh_user, ''), COALESCE(ssh_private_key, ''),
 		COALESCE(registry_user, ''), COALESCE(registry_token, ''),
-		COALESCE(sonar_url, ''), COALESCE(sonar_token, ''),
 		created_at
 		FROM projects WHERE id = $1
 	`
@@ -126,7 +125,6 @@ func (db *DB) GetProject(id int) (*models.Project, error) {
 	err := db.conn.QueryRow(query, id).
 		Scan(&p.ID, &p.OwnerID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
 			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken,
-			&p.SonarURL, &p.SonarToken,
 			&p.CreatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -134,6 +132,18 @@ func (db *DB) GetProject(id int) (*models.Project, error) {
 		}
 		return nil, fmt.Errorf("failed to get project: %w", err)
 	}
+
+	variables, err := db.GetVariablesByProject(id)
+	if err == nil {
+		// Mask secrets
+		for i := range variables {
+			if variables[i].IsSecret {
+				variables[i].Value = "*****"
+			}
+		}
+		p.Variables = variables
+	}
+
 	return &p, nil
 }
 
@@ -143,7 +153,6 @@ func (db *DB) GetAllProjects() ([]models.Project, error) {
 		SELECT id, owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename,
 		COALESCE(ssh_host, ''), COALESCE(ssh_user, ''), COALESCE(ssh_private_key, ''),
 		COALESCE(registry_user, ''), COALESCE(registry_token, ''),
-		COALESCE(sonar_url, ''), COALESCE(sonar_token, ''),
 		created_at
 		FROM projects ORDER BY created_at DESC
 	`
@@ -158,7 +167,6 @@ func (db *DB) GetAllProjects() ([]models.Project, error) {
 		var p models.Project
 		if err := rows.Scan(&p.ID, &p.OwnerID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
 			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken,
-			&p.SonarURL, &p.SonarToken,
 			&p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan project: %w", err)
 		}
@@ -173,7 +181,6 @@ func (db *DB) GetProjectsForUser(userID int) ([]models.Project, error) {
 		SELECT DISTINCT p.id, p.owner_id, p.name, p.repo_url, p.access_token, p.pipeline_filename, p.deployment_filename,
 		COALESCE(p.ssh_host, ''), COALESCE(p.ssh_user, ''), COALESCE(p.ssh_private_key, ''),
 		COALESCE(p.registry_user, ''), COALESCE(p.registry_token, ''),
-		COALESCE(p.sonar_url, ''), COALESCE(p.sonar_token, ''),
 		p.created_at
 		FROM projects p
 		LEFT JOIN project_members pm ON p.id = pm.project_id
@@ -191,7 +198,6 @@ func (db *DB) GetProjectsForUser(userID int) ([]models.Project, error) {
 		var p models.Project
 		if err := rows.Scan(&p.ID, &p.OwnerID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
 			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken,
-			&p.SonarURL, &p.SonarToken,
 			&p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan project: %w", err)
 		}
@@ -213,15 +219,15 @@ func (db *DB) UpdateProject(id int, project *models.NewProject) (*models.Project
 	query := `
 		UPDATE projects
 		SET name = $1, repo_url = $2, access_token = $3, pipeline_filename = $4, deployment_filename = $5,
-		ssh_host = $6, ssh_user = $7, ssh_private_key = $8, registry_user = $9, registry_token = $10, sonar_url = $11, sonar_token = $12
-		WHERE id = $13
-		RETURNING id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, sonar_url, sonar_token, created_at
+		ssh_host = $6, ssh_user = $7, ssh_private_key = $8, registry_user = $9, registry_token = $10
+		WHERE id = $11
+		RETURNING id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, created_at
 	`
 	var p models.Project
 	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename,
-		project.SSHHost, project.SSHUser, project.SSHPrivateKey, project.RegistryUser, project.RegistryToken, project.SonarURL, project.SonarToken, id).
+		project.SSHHost, project.SSHUser, project.SSHPrivateKey, project.RegistryUser, project.RegistryToken, id).
 		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
-			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken, &p.SonarURL, &p.SonarToken, &p.CreatedAt)
+			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update project: %w", err)
 	}
@@ -695,4 +701,42 @@ func (db *DB) GetDeploymentLogs(pipelineID int) ([]models.DeploymentLog, error) 
 		logs = append(logs, l)
 	}
 	return logs, nil
+}
+
+func (db *DB) CreateVariable(v *models.Variable) error {
+	query := `
+		INSERT INTO variables (project_id, key, value, is_secret)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, created_at
+	`
+	return db.conn.QueryRow(query, v.ProjectID, v.Key, v.Value, v.IsSecret).Scan(&v.ID, &v.CreatedAt)
+}
+
+func (db *DB) GetVariablesByProject(projectID int) ([]models.Variable, error) {
+	query := `
+		SELECT id, project_id, key, value, is_secret, created_at
+		FROM variables
+		WHERE project_id = $1
+	`
+	rows, err := db.conn.Query(query, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get variables: %w", err)
+	}
+	defer rows.Close()
+
+	var variables []models.Variable
+	for rows.Next() {
+		var v models.Variable
+		if err := rows.Scan(&v.ID, &v.ProjectID, &v.Key, &v.Value, &v.IsSecret, &v.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan variable: %w", err)
+		}
+		variables = append(variables, v)
+	}
+	return variables, nil
+}
+
+func (db *DB) DeleteVariable(projectID int, key string) error {
+	query := `DELETE FROM variables WHERE project_id = $1 AND key = $2`
+	_, err := db.conn.Exec(query, projectID, key)
+	return err
 }

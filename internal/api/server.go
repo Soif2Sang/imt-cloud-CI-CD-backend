@@ -83,6 +83,9 @@ func (s *Server) Start() error {
 	log.Printf("  - GET    /api/v1/projects/{id}/members")
 	log.Printf("  - POST   /api/v1/projects/{id}/members")
 	log.Printf("  - DELETE /api/v1/projects/{id}/members/{userId}")
+	log.Printf("  - GET    /api/v1/projects/{id}/variables")
+	log.Printf("  - POST   /api/v1/projects/{id}/variables")
+	log.Printf("  - DELETE /api/v1/projects/{id}/variables/{key}")
 	log.Printf("  - GET    /api/v1/projects/{id}/pipelines")
 	log.Printf("  - POST   /api/v1/projects/{id}/pipelines")
 	log.Printf("  - GET    /api/v1/projects/{id}/pipelines/{id}")
@@ -113,6 +116,18 @@ func (s *Server) routeProjectsSubpath(w http.ResponseWriter, r *http.Request) {
 	// /api/v1/projects/{projectId}/members/{userId}
 	if len(parts) == 3 && parts[1] == "members" {
 		s.handleProjectMember(w, r)
+		return
+	}
+
+	// /api/v1/projects/{projectId}/variables
+	if len(parts) == 2 && parts[1] == "variables" {
+		s.handleVariables(w, r)
+		return
+	}
+
+	// /api/v1/projects/{projectId}/variables/{key}
+	if len(parts) == 3 && parts[1] == "variables" {
+		s.handleVariable(w, r)
 		return
 	}
 

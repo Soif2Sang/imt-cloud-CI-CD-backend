@@ -219,11 +219,16 @@ func (s *Server) executePipeline(config *pipeline.PipelineConfig, workspaceDir s
 	// Prepare environment variables
 	var envVars []string
 	if project != nil {
-		if project.SonarURL != "" {
-			envVars = append(envVars, fmt.Sprintf("SONAR_HOST_URL=%s", project.SonarURL))
-		}
-		if project.SonarToken != "" {
-			envVars = append(envVars, fmt.Sprintf("SONAR_TOKEN=%s", project.SonarToken))
+		// Inject Custom Variables (Secrets/Env Vars)
+		if s.db != nil {
+			variables, err := s.db.GetVariablesByProject(project.ID)
+			if err != nil {
+				log.Printf("Failed to fetch project variables: %v", err)
+			} else {
+				for _, v := range variables {
+					envVars = append(envVars, fmt.Sprintf("%s=%s", v.Key, v.Value))
+				}
+			}
 		}
 	}
 

@@ -29,9 +29,18 @@ CREATE TABLE IF NOT EXISTS projects (
     ssh_private_key TEXT,
     registry_user TEXT,
     registry_token TEXT,
-    sonar_url TEXT,
-    sonar_token TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table des variables d'environnement (Secrets/Env Vars)
+CREATE TABLE IF NOT EXISTS variables (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    is_secret BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id, key)
 );
 
 -- Table des membres de projet (Collaborateurs)
@@ -96,6 +105,7 @@ CREATE TABLE IF NOT EXISTS deployment_logs (
 
 -- Index pour optimiser les requêtes fréquentes
 CREATE INDEX IF NOT EXISTS idx_projects_owner_id ON projects(owner_id);
+CREATE INDEX IF NOT EXISTS idx_variables_project_id ON variables(project_id);
 CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_pipelines_project_id ON pipelines(project_id);
 CREATE INDEX IF NOT EXISTS idx_pipelines_status ON pipelines(status);
