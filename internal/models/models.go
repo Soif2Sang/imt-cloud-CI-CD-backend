@@ -2,8 +2,19 @@ package models
 
 import "time"
 
+type User struct {
+	ID         int       `json:"id"`
+	Email      string    `json:"email"`
+	Name       string    `json:"name"`
+	AvatarURL  string    `json:"avatar_url"`
+	Provider   string    `json:"provider"`
+	ProviderID string    `json:"provider_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type Project struct {
 	ID        int       `json:"id"`
+	OwnerID   int       `json:"owner_id"`
 	Name      string    `json:"name"`
 	RepoURL            string    `json:"repo_url"`
 	AccessToken        string    `json:"access_token"`
@@ -20,6 +31,7 @@ type Project struct {
 }
 
 type NewProject struct {
+	OwnerID            int    `json:"owner_id"`
 	Name               string `json:"name"`
 	RepoURL            string `json:"repo_url"`
 	AccessToken        string `json:"access_token"`

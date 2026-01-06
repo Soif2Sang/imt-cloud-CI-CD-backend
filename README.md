@@ -4,6 +4,8 @@ A lightweight CI/CD engine built in Go that executes pipelines using Docker cont
 
 ## Features
 
+- 🔒 **OAuth2 Authentication** - Secure login with Google and GitHub
+- 👤 **User Management** - Project ownership and role-based access
 - 🔗 **GitHub Webhook Integration** - Automatically trigger pipelines on push
 - 📄 **GitLab CI Config Parser** - Parse `.gitlab-ci.yml` configuration files
 - 🐳 **Docker Execution** - Run jobs in isolated Docker containers
@@ -134,14 +136,37 @@ The backend will:
 
 ## Configuration
 
+### OAuth2 Setup
+
+To enable authentication, you need to create OAuth applications in:
+1. **Google Cloud Console**: Enable Google+ API, create credentials for Web Application.
+   - Authorized redirect URI: `http://localhost:8080/auth/google/callback` (or your production URL)
+2. **GitHub Developer Settings**: Create New OAuth App.
+   - Authorization callback URL: `http://localhost:8080/auth/github/callback` (or your production URL)
+
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection string | `postgres://cicd:cicd_password@localhost:5432/cicd_db?sslmode=disable` |
 | `API_PORT` | Server port | `8080` |
+| `API_URL` | Public URL of the backend (for callbacks) | `http://localhost:8080` |
+| `FRONTEND_URL` | URL of the frontend (for redirects) | `http://localhost:3000` |
+| `JWT_SECRET` | Secret key for signing JWT tokens | `your-secret-key...` |
+| `GOOGLE_CLIENT_ID` | Google OAuth Client ID | - |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth Client Secret | - |
+| `GITHUB_CLIENT_ID` | GitHub OAuth Client ID | - |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth Client Secret | - |
 
 ## API Endpoints
+
+### Authentication
+
+```
+GET /auth/google/login
+GET /auth/github/login
+```
+Redirects to the respective provider for login.
 
 ### Webhook
 

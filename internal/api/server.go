@@ -51,20 +51,30 @@ func enableCORS(next http.Handler) http.Handler {
 
 // Start starts the API server
 func (s *Server) Start() error {
+	InitializeOAuth()
+
 	// Health check
 	http.HandleFunc("/health", s.handleHealth)
 
 	// Webhook
 	http.HandleFunc("/webhook/github", s.handleGitHubWebhook)
 
+	// Auth routes
+	http.HandleFunc("/auth/google/login", s.handleAuthLogin)
+	http.HandleFunc("/auth/google/callback", s.handleAuthCallback)
+	http.HandleFunc("/auth/github/login", s.handleAuthLogin)
+	http.HandleFunc("/auth/github/callback", s.handleAuthCallback)
+
 	// API v1 routes
-	http.HandleFunc("/api/v1/projects", s.handleProjects)
-	http.HandleFunc("/api/v1/projects/", s.routeProjectsSubpath)
+	http.HandleFunc("/api/v1/projects", s.AuthMiddleware(s.handleProjects))
+	http.HandleFunc("/api/v1/projects/", s.AuthMiddleware(s.routeProjectsSubpath))
 
 	log.Printf("Starting API server on port %s", s.port)
 	log.Printf("Endpoints:")
 	log.Printf("  - GET    /health")
 	log.Printf("  - POST   /webhook/github")
+	log.Printf("  - GET    /auth/{provider}/login")
+	log.Printf("  - GET    /auth/{provider}/callback")
 	log.Printf("  - GET    /api/v1/projects")
 	log.Printf("  - POST   /api/v1/projects")
 	log.Printf("  - GET    /api/v1/projects/{id}")
@@ -197,7 +207,9 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 
 
 
-// findOrCreateProject finds an existing project or creates a new one
+// findOrCreateProject finds an existing project
+// NOTE: Renamed logic but kept name for compatibility with runner.go for now
+// It no longer creates projects automatically for security reasons.
 func (s *Server) findOrCreateProject(repo models.Repository) (*models.Project, error) {
 	// Try to find existing project by repo URL
 	projects, err := s.db.GetAllProjects()
@@ -211,14 +223,7 @@ func (s *Server) findOrCreateProject(repo models.Repository) (*models.Project, e
 		}
 	}
 
-	// Create new project
-	newProject := &models.NewProject{
-		Name:        repo.FullName,
-		RepoURL:     repo.CloneURL,
-		AccessToken: "", // Empty for public repos, user can update later
-	}
-
-	return s.db.CreateProject(newProject)
+	return nil, fmt.Errorf("project not found for repo: %s", repo.CloneURL)
 }
 
 

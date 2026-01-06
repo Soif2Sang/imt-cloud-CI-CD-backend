@@ -11,12 +11,10 @@ import (
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/models"
 )
 
-// DB holds the database connection pool
 type DB struct {
 	conn *sql.DB
 }
 
-// New creates a new database connection
 func New() (*DB, error) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -46,6 +44,47 @@ func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
+// ============== User Operations ==============
+
+func (db *DB) CreateUser(user *models.User) error {
+	query := `
+		INSERT INTO users (email, name, avatar_url, provider, provider_id)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (email) DO UPDATE SET
+			name = EXCLUDED.name,
+			avatar_url = EXCLUDED.avatar_url,
+			provider = EXCLUDED.provider,
+			provider_id = EXCLUDED.provider_id
+		RETURNING id, created_at
+	`
+	return db.conn.QueryRow(query, user.Email, user.Name, user.AvatarURL, user.Provider, user.ProviderID).
+		Scan(&user.ID, &user.CreatedAt)
+}
+
+func (db *DB) GetUserByEmail(email string) (*models.User, error) {
+	var user models.User
+	query := `SELECT id, email, name, avatar_url, provider, provider_id, created_at FROM users WHERE email = $1`
+	err := db.conn.QueryRow(query, email).Scan(
+		&user.ID, &user.Email, &user.Name, &user.AvatarURL, &user.Provider, &user.ProviderID, &user.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (db *DB) GetUserByID(id int) (*models.User, error) {
+	var user models.User
+	query := `SELECT id, email, name, avatar_url, provider, provider_id, created_at FROM users WHERE id = $1`
+	err := db.conn.QueryRow(query, id).Scan(
+		&user.ID, &user.Email, &user.Name, &user.AvatarURL, &user.Provider, &user.ProviderID, &user.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 // ============== Project Operations ==============
 
 // CreateProject creates a new project in the database
@@ -59,14 +98,14 @@ func (db *DB) CreateProject(project *models.NewProject) (*models.Project, error)
 	}
 
 	query := `
-		INSERT INTO projects (name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, sonar_url, sonar_token)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, sonar_url, sonar_token, created_at
+		INSERT INTO projects (owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, sonar_url, sonar_token)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		RETURNING id, owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, sonar_url, sonar_token, created_at
 	`
 	var p models.Project
-	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename,
+	err := db.conn.QueryRow(query, project.OwnerID, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename,
 		project.SSHHost, project.SSHUser, project.SSHPrivateKey, project.RegistryUser, project.RegistryToken, project.SonarURL, project.SonarToken).
-		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
+		Scan(&p.ID, &p.OwnerID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
 			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken, &p.SonarURL, &p.SonarToken, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project: %w", err)
@@ -77,7 +116,7 @@ func (db *DB) CreateProject(project *models.NewProject) (*models.Project, error)
 // GetProject retrieves a project by ID
 func (db *DB) GetProject(id int) (*models.Project, error) {
 	query := `
-		SELECT id, name, repo_url, access_token, pipeline_filename, deployment_filename,
+		SELECT id, owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename,
 		COALESCE(ssh_host, ''), COALESCE(ssh_user, ''), COALESCE(ssh_private_key, ''),
 		COALESCE(registry_user, ''), COALESCE(registry_token, ''),
 		COALESCE(sonar_url, ''), COALESCE(sonar_token, ''),
@@ -86,7 +125,7 @@ func (db *DB) GetProject(id int) (*models.Project, error) {
 	`
 	var p models.Project
 	err := db.conn.QueryRow(query, id).
-		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
+		Scan(&p.ID, &p.OwnerID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
 			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken,
 			&p.SonarURL, &p.SonarToken,
 			&p.CreatedAt)
@@ -102,7 +141,7 @@ func (db *DB) GetProject(id int) (*models.Project, error) {
 // GetAllProjects retrieves all projects
 func (db *DB) GetAllProjects() ([]models.Project, error) {
 	query := `
-		SELECT id, name, repo_url, access_token, pipeline_filename, deployment_filename,
+		SELECT id, owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename,
 		COALESCE(ssh_host, ''), COALESCE(ssh_user, ''), COALESCE(ssh_private_key, ''),
 		COALESCE(registry_user, ''), COALESCE(registry_token, ''),
 		COALESCE(sonar_url, ''), COALESCE(sonar_token, ''),
@@ -118,7 +157,7 @@ func (db *DB) GetAllProjects() ([]models.Project, error) {
 	var projects []models.Project
 	for rows.Next() {
 		var p models.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
+		if err := rows.Scan(&p.ID, &p.OwnerID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
 			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken,
 			&p.SonarURL, &p.SonarToken,
 			&p.CreatedAt); err != nil {

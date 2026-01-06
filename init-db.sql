@@ -4,9 +4,21 @@
 CREATE USER sonar WITH PASSWORD 'sonar';
 CREATE DATABASE sonar OWNER sonar;
 
+-- Table des utilisateurs
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    name TEXT,
+    avatar_url TEXT,
+    provider TEXT,
+    provider_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Table des projets (Repositories)
 CREATE TABLE IF NOT EXISTS projects (
     id SERIAL PRIMARY KEY,
+    owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     repo_url TEXT NOT NULL UNIQUE,
     access_token TEXT NOT NULL,
@@ -74,6 +86,7 @@ CREATE TABLE IF NOT EXISTS deployment_logs (
 );
 
 -- Index pour optimiser les requêtes fréquentes
+CREATE INDEX IF NOT EXISTS idx_projects_owner_id ON projects(owner_id);
 CREATE INDEX IF NOT EXISTS idx_pipelines_project_id ON pipelines(project_id);
 CREATE INDEX IF NOT EXISTS idx_pipelines_status ON pipelines(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_pipeline_id ON jobs(pipeline_id);

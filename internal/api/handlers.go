@@ -115,6 +115,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID, err := getUserIDFromContext(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	newProject.OwnerID = userID
+
 	project, err := s.db.CreateProject(&newProject)
 	if err != nil {
 		log.Printf("Failed to create project: %v", err)
@@ -148,6 +155,23 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, projectID
 		return
 	}
 
+	userID, err := getUserIDFromContext(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	existingProject, err := s.db.GetProject(projectID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Project not found")
+		return
+	}
+
+	if existingProject.OwnerID != userID {
+		respondError(w, http.StatusForbidden, "You are not the owner of this project")
+		return
+	}
+
 	var updateData models.NewProject
 	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
@@ -173,6 +197,23 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, projectID
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request, projectID int) {
 	if s.db == nil {
 		respondError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	userID, err := getUserIDFromContext(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	existingProject, err := s.db.GetProject(projectID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Project not found")
+		return
+	}
+
+	if existingProject.OwnerID != userID {
+		respondError(w, http.StatusForbidden, "You are not the owner of this project")
 		return
 	}
 

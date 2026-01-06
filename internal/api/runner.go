@@ -376,13 +376,14 @@ func (s *Server) runPipelineFromWebhook(pushEvent models.PushEvent, branch, comm
 	if s.db != nil {
 		project, err := s.findOrCreateProject(pushEvent.Repository)
 		if err != nil {
-			log.Printf("Failed to find/create project: %v", err)
-		} else {
-			projectID = project.ID
-			accessToken = project.AccessToken
-			pipelineFilename = project.PipelineFilename
-			deploymentFilename = project.DeploymentFilename
+			log.Printf("Project not found for repo %s: %v. Ignoring webhook.", pushEvent.Repository.CloneURL, err)
+			return
 		}
+
+		projectID = project.ID
+		accessToken = project.AccessToken
+		pipelineFilename = project.PipelineFilename
+		deploymentFilename = project.DeploymentFilename
 	}
 
 	if pipelineFilename == "" {
