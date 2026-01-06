@@ -54,8 +54,10 @@ func InitializeOAuth() {
 
 // UserClaims represents the JWT claims
 type UserClaims struct {
-	UserID int    `json:"user_id"`
-	Email  string `json:"email"`
+	UserID    int    `json:"user_id"`
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatar_url"`
 	jwt.RegisteredClaims
 }
 
@@ -250,8 +252,10 @@ func getUserInfo(provider, accessToken string) (*models.User, error) {
 
 func createToken(user *models.User) (string, error) {
 	claims := UserClaims{
-		UserID: user.ID,
-		Email:  user.Email,
+		UserID:    user.ID,
+		Email:     user.Email,
+		Name:      user.Name,
+		AvatarURL: user.AvatarURL,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

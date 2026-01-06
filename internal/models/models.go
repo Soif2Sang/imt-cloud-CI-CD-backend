@@ -46,6 +46,14 @@ type NewProject struct {
 	SonarToken      string `json:"sonar_token"`
 }
 
+type ProjectMember struct {
+	ProjectID int       `json:"project_id"`
+	UserID    int       `json:"user_id"`
+	Role      string    `json:"role"`
+	JoinedAt  time.Time `json:"joined_at"`
+	User      *User     `json:"user,omitempty"`
+}
+
 type Pipeline struct {
 	ID         int        `json:"id"`
 	ProjectID  int        `json:"project_id"`

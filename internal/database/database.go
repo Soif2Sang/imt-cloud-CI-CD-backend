@@ -7,7 +7,6 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/models"
 )
 
@@ -168,6 +167,39 @@ func (db *DB) GetAllProjects() ([]models.Project, error) {
 	return projects, nil
 }
 
+// GetProjectsForUser retrieves projects where user is owner or member
+func (db *DB) GetProjectsForUser(userID int) ([]models.Project, error) {
+	query := `
+		SELECT DISTINCT p.id, p.owner_id, p.name, p.repo_url, p.access_token, p.pipeline_filename, p.deployment_filename,
+		COALESCE(p.ssh_host, ''), COALESCE(p.ssh_user, ''), COALESCE(p.ssh_private_key, ''),
+		COALESCE(p.registry_user, ''), COALESCE(p.registry_token, ''),
+		COALESCE(p.sonar_url, ''), COALESCE(p.sonar_token, ''),
+		p.created_at
+		FROM projects p
+		LEFT JOIN project_members pm ON p.id = pm.project_id
+		WHERE p.owner_id = $1 OR pm.user_id = $1
+		ORDER BY p.created_at DESC
+	`
+	rows, err := db.conn.Query(query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query projects: %w", err)
+	}
+	defer rows.Close()
+
+	var projects []models.Project
+	for rows.Next() {
+		var p models.Project
+		if err := rows.Scan(&p.ID, &p.OwnerID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
+			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken,
+			&p.SonarURL, &p.SonarToken,
+			&p.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan project: %w", err)
+		}
+		projects = append(projects, p)
+	}
+	return projects, nil
+}
+
 // UpdateProject updates an existing project
 func (db *DB) UpdateProject(id int, project *models.NewProject) (*models.Project, error) {
 	// Set defaults if empty
@@ -206,6 +238,62 @@ func (db *DB) DeleteProject(id int) error {
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		return fmt.Errorf("project not found")
+	}
+	return nil
+}
+
+// ============== Project Member Operations ==============
+
+// AddProjectMember adds a user to a project
+func (db *DB) AddProjectMember(projectID, userID int, role string) error {
+	query := `
+		INSERT INTO project_members (project_id, user_id, role)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role
+	`
+	_, err := db.conn.Exec(query, projectID, userID, role)
+	if err != nil {
+		return fmt.Errorf("failed to add project member: %w", err)
+	}
+	return nil
+}
+
+// GetProjectMembers retrieves all members of a project
+func (db *DB) GetProjectMembers(projectID int) ([]models.ProjectMember, error) {
+	query := `
+		SELECT pm.project_id, pm.user_id, pm.role, pm.joined_at,
+		       u.id, u.email, u.name, u.avatar_url
+		FROM project_members pm
+		JOIN users u ON pm.user_id = u.id
+		WHERE pm.project_id = $1
+		ORDER BY pm.joined_at DESC
+	`
+	rows, err := db.conn.Query(query, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query project members: %w", err)
+	}
+	defer rows.Close()
+
+	var members []models.ProjectMember
+	for rows.Next() {
+		var pm models.ProjectMember
+		var u models.User
+		if err := rows.Scan(&pm.ProjectID, &pm.UserID, &pm.Role, &pm.JoinedAt,
+			&u.ID, &u.Email, &u.Name, &u.AvatarURL); err != nil {
+			return nil, fmt.Errorf("failed to scan project member: %w", err)
+		}
+		pm.User = &u
+		members = append(members, pm)
+	}
+	return members, nil
+}
+
+// RemoveProjectMember removes a user from a project
+func (db *DB) RemoveProjectMember(projectID, userID int) error {
+	query := `DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`
+	_, err := db.conn.Exec(query, projectID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to remove project member: %w", err)
 	}
 	return nil
 }

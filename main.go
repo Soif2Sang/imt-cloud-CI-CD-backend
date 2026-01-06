@@ -7,9 +7,15 @@ import (
 
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/api"
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/database"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Load .env file
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using system environment variables")
+	}
+
 	fmt.Println("Démarrage du moteur CI/CD...")
 
 	// Initialize database connection

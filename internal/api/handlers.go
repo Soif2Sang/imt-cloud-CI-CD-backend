@@ -87,7 +87,13 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projects, err := s.db.GetAllProjects()
+	userID, err := getUserIDFromContext(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	projects, err := s.db.GetProjectsForUser(userID)
 	if err != nil {
 		log.Printf("Failed to get projects: %v", err)
 		respondError(w, http.StatusInternalServerError, "Failed to get projects")
@@ -139,10 +145,39 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request, projectID in
 		return
 	}
 
+	userID, err := getUserIDFromContext(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
 	project, err := s.db.GetProject(projectID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "Project not found")
 		return
+	}
+
+	// Check access permissions (Owner or Member)
+	if project.OwnerID != userID {
+		members, err := s.db.GetProjectMembers(projectID)
+		if err != nil {
+			log.Printf("Failed to check membership: %v", err)
+			respondError(w, http.StatusInternalServerError, "Failed to check permissions")
+			return
+		}
+
+		isMember := false
+		for _, m := range members {
+			if m.UserID == userID {
+				isMember = true
+				break
+			}
+		}
+
+		if !isMember {
+			respondError(w, http.StatusForbidden, "You do not have access to this project")
+			return
+		}
 	}
 
 	respondJSON(w, http.StatusOK, project)
@@ -219,6 +254,155 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request, projectID
 
 	if err := s.db.DeleteProject(projectID); err != nil {
 		respondError(w, http.StatusNotFound, "Project not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// === Project Members Handlers ===
+
+// handleProjectMembers handles /api/v1/projects/{projectId}/members
+func (s *Server) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
+	// Extract project ID
+	projectID, err := parseIDFromPath(r.URL.Path, 3)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid project ID")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.listProjectMembers(w, r, projectID)
+	case http.MethodPost:
+		s.inviteMember(w, r, projectID)
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// handleProjectMember handles /api/v1/projects/{projectId}/members/{userId}
+func (s *Server) handleProjectMember(w http.ResponseWriter, r *http.Request) {
+	// Extract project ID
+	projectID, err := parseIDFromPath(r.URL.Path, 3)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid project ID")
+		return
+	}
+
+	userID, err := parseIDFromPath(r.URL.Path, 5)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid user ID")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		s.removeProjectMember(w, r, projectID, userID)
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+// listProjectMembers returns all members of a project
+func (s *Server) listProjectMembers(w http.ResponseWriter, r *http.Request, projectID int) {
+	if s.db == nil {
+		respondError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	members, err := s.db.GetProjectMembers(projectID)
+	if err != nil {
+		log.Printf("Failed to get project members: %v", err)
+		respondError(w, http.StatusInternalServerError, "Failed to get project members")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, members)
+}
+
+// inviteMember adds a user to a project by email
+func (s *Server) inviteMember(w http.ResponseWriter, r *http.Request, projectID int) {
+	if s.db == nil {
+		respondError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	userID, err := getUserIDFromContext(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	project, err := s.db.GetProject(projectID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Project not found")
+		return
+	}
+
+	if project.OwnerID != userID {
+		respondError(w, http.StatusForbidden, "Only the owner can invite members")
+		return
+	}
+
+	var reqBody struct {
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if reqBody.Email == "" {
+		respondError(w, http.StatusBadRequest, "Email is required")
+		return
+	}
+	if reqBody.Role == "" {
+		reqBody.Role = "viewer"
+	}
+
+	userToInvite, err := s.db.GetUserByEmail(reqBody.Email)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "User not found. They must sign in first.")
+		return
+	}
+
+	if err := s.db.AddProjectMember(projectID, userToInvite.ID, reqBody.Role); err != nil {
+		log.Printf("Failed to add member: %v", err)
+		respondError(w, http.StatusInternalServerError, "Failed to add member")
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, map[string]string{"message": "Member added"})
+}
+
+// removeProjectMember removes a member
+func (s *Server) removeProjectMember(w http.ResponseWriter, r *http.Request, projectID, targetUserID int) {
+	if s.db == nil {
+		respondError(w, http.StatusServiceUnavailable, "Database not available")
+		return
+	}
+
+	userID, err := getUserIDFromContext(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	project, err := s.db.GetProject(projectID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Project not found")
+		return
+	}
+
+	if project.OwnerID != userID {
+		respondError(w, http.StatusForbidden, "Only the owner can remove members")
+		return
+	}
+
+	if err := s.db.RemoveProjectMember(projectID, targetUserID); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to remove member")
 		return
 	}
 

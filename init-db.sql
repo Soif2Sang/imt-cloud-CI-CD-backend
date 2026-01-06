@@ -34,6 +34,15 @@ CREATE TABLE IF NOT EXISTS projects (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Table des membres de projet (Collaborateurs)
+CREATE TABLE IF NOT EXISTS project_members (
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT DEFAULT 'viewer', -- viewer, editor
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, user_id)
+);
+
 -- Table des pipelines (Une exécution du fichier .gitlab-ci.yml)
 CREATE TABLE IF NOT EXISTS pipelines (
     id SERIAL PRIMARY KEY,
@@ -87,6 +96,7 @@ CREATE TABLE IF NOT EXISTS deployment_logs (
 
 -- Index pour optimiser les requêtes fréquentes
 CREATE INDEX IF NOT EXISTS idx_projects_owner_id ON projects(owner_id);
+CREATE INDEX IF NOT EXISTS idx_project_members_user_id ON project_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_pipelines_project_id ON pipelines(project_id);
 CREATE INDEX IF NOT EXISTS idx_pipelines_status ON pipelines(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_pipeline_id ON jobs(pipeline_id);
