@@ -93,7 +93,7 @@ type Deployment struct {
 	ID         int        `json:"id"`
 	PipelineID int        `json:"pipeline_id"`
 	Status     string     `json:"status"`
-	StartedAt  time.Time  `json:"started_at"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 

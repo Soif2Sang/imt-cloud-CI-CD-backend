@@ -1,8 +1,10 @@
 package ssh
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -78,4 +80,41 @@ func (c *Client) CopyFile(localContent []byte, remotePath string) error {
 	session.Stdin = bytes.NewReader(localContent)
 	// Write stdin to file on remote
 	return session.Run(fmt.Sprintf("cat > %s", remotePath))
+}
+
+// RunCommandStream executes a command on the remote server and streams the output line by line
+func (c *Client) RunCommandStream(cmd string, onLog func(string)) error {
+	session, err := c.client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdout pipe: %w", err)
+	}
+
+	stderr, err := session.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stderr pipe: %w", err)
+	}
+
+	if err := session.Start(cmd); err != nil {
+		return fmt.Errorf("failed to start command: %w", err)
+	}
+
+	// Helper to scan and report logs
+	scan := func(r io.Reader) {
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			onLog(scanner.Text())
+		}
+	}
+
+	// Run scanners in goroutines
+	go scan(stdout)
+	go scan(stderr)
+
+	return session.Wait()
 }

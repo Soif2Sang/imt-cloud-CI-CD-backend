@@ -19,7 +19,7 @@ func main() {
 	fmt.Println("Démarrage du moteur CI/CD...")
 
 	// Initialize database connection
-	db, err := database.New()
+	db, err := database.New(os.Getenv("ENCRYPTION_KEY"))
 	if err != nil {
 		log.Printf("Warning: Could not connect to database: %v", err)
 		log.Println("Running without database persistence...")

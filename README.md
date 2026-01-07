@@ -1,288 +1,117 @@
 # IMT Cloud CI/CD Backend
 
-A lightweight CI/CD engine built in Go that executes pipelines using Docker containers.
+A lightweight, robust CI/CD engine built in Go. It supports custom pipelines, Docker-based execution, automated deployments via SSH, and automatic rollbacks.
 
-## Features
+## 🚀 Getting Started
 
-- 🔒 **OAuth2 Authentication** - Secure login with Google and GitHub
-- 👤 **User Management** - Project ownership and role-based access
-- 🔗 **GitHub Webhook Integration** - Automatically trigger pipelines on push
-- 📄 **GitLab CI Config Parser** - Parse `.gitlab-ci.yml` configuration files
-- 🐳 **Docker Execution** - Run jobs in isolated Docker containers
-- 💾 **PostgreSQL Storage** - Store pipelines, jobs, and logs
-- 📊 **Database Viewer** - Adminer for easy data inspection
+### Prerequisites
 
-## Architecture
+- **Docker** & **Docker Compose**
+- **Go** 1.21+
+- **Node.js** & **npm** (for the frontend)
 
-```
-GitHub Push → Webhook → Clone Repo → Parse .gitlab-ci.yml → Run Jobs in Docker → Store Logs
-```
+### Installation & Startup
 
-**Setup:**
-- PostgreSQL + Adminer → Run in Docker
-- Go backend → Run locally (avoids Docker-in-Docker issues)
+1.  **Start Infrastructure**
+    Launch the database and SonarQube services:
+    ```bash
+    docker-compose up -d
+    ```
 
-## Prerequisites
+2.  **Configure & Run Backend**
+    ```bash
+    # Install dependencies
+    go mod tidy
 
-- Go 1.21+
-- Docker & Docker Compose
-- Git
+    # Configure environment
+    cp .env.example .env
+    # Populate the .env file (Database connection, OAuth credentials, etc.)
 
-## Quick Start
+    # Run the server
+    go run main.go
+    ```
+    The backend API will be available at `http://localhost:8080`.
 
-### 1. Start the database
+3.  **Run Frontend** (in a separate terminal)
+    Navigate to the frontend directory:
+    ```bash
+    cd ../imt-cloud-CI-CD-frontend
+    npm install
+    npm run dev
+    ```
+    Access the UI at `http://localhost:5173`.
 
-```bash
-docker-compose up -d
-```
+---
 
-This starts:
-- **cicd-db** - PostgreSQL database on port `5432`
-- **cicd-adminer** - Database viewer on port `8081`
+## 🛠 Usage Workflow
 
-### 2. Build and run the Go backend
+### 1. Create a Project
+1.  Log in to the platform.
+2.  Click **"New Project"**.
+3.  Provide the **Repository URL** (HTTPS).
+4.  (Optional) Provide a **Personal Access Token** if the repo is private.
 
-```bash
-# Install dependencies
-go mod tidy
+### 2. Configure Deployment (SSH)
+To enable automated deployment, you must set up SSH access to your target server.
 
-# Build
-go build -o cicd-backend .
+**⚠️ Prerequisite: Setup Target Host**
+Before configuring the project, ensure your deployment server is ready:
+1.  Ensure you have a user (e.g., `ubuntu` or `root`) that can run `docker` commands without sudo.
+2.  Generate an SSH key pair (or use an existing one).
+3.  Add the **Public Key** to the target user's `~/.ssh/authorized_keys` file.
 
-# Run
-export DATABASE_URL="postgres://cicd:cicd_password@localhost:5432/cicd_db?sslmode=disable"
-./cicd-backend
-```
+**In the CI/CD Project Settings:**
+1.  Go to **Project Settings**.
+2.  **SSH Host**: Enter the IP address and port (e.g., `192.168.1.10:22`).
+3.  **SSH User**: Enter the username (e.g., `ubuntu`).
+4.  **SSH Private Key**: Paste the **Private Key** content directly.
 
-Or run directly:
+### 3. Configure Container Registry
+To push built images to a registry (Docker Hub, etc.):
+1.  In **Project Settings** > **Container Registry**.
+2.  Enter **Registry User** (e.g., Docker Hub username).
+3.  Enter **Registry Token** (Access Token).
 
-```bash
-DATABASE_URL="postgres://cicd:cicd_password@localhost:5432/cicd_db?sslmode=disable" go run .
-```
+### 4. Environment Variables
+You can inject secrets (like `SONAR_TOKEN`, `API_KEYS`) without hardcoding them in your files:
+1.  Go to **Project Settings** > **Environment Variables**.
+2.  Add Key/Value pairs.
+3.  Toggle the **Lock Icon** to mark sensitive values as **Secret**.
+4.  These are injected into your pipeline jobs automatically.
 
-### 3. Access the services
+---
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| Backend API | http://localhost:8080 | CI/CD engine |
-| Webhook Endpoint | http://localhost:8080/webhook/github | GitHub webhook receiver |
-| Health Check | http://localhost:8080/health | Server status |
-| Adminer | http://localhost:8081 | Database viewer |
+## 📄 Pipeline Configuration
 
-**Adminer credentials:**
-- System: `PostgreSQL`
-- Server: `localhost`
-- Username: `cicd`
-- Password: `cicd_password`
-- Database: `cicd_db`
-
-## GitHub Webhook Setup
-
-### 1. Expose your backend (for local development)
-
-Use [ngrok](https://ngrok.com/) to expose your local server:
-
-```bash
-ngrok http 8080
-```
-
-This gives you a public URL like `https://abc123.ngrok.io`
-
-### 2. Configure GitHub Webhook
-
-1. Go to your GitHub repository → **Settings** → **Webhooks** → **Add webhook**
-2. Configure:
-   - **Payload URL**: `https://abc123.ngrok.io/webhook/github`
-   - **Content type**: `application/json`
-   - **Events**: Select "Just the push event"
-3. Click **Add webhook**
-
-### 3. Add a `.gitlab-ci.yml` to your repo
+Add a `pipeline.yml` (default name) to your repository root. We use a lightweight, GitLab-CI inspired syntax.
 
 ```yaml
 stages:
   - build
   - test
+  - scan
 
 build_job:
   stage: build
-  image: alpine:latest
+  image: python:3.9
   script:
-    - echo "Building the project..."
-    - ls -la
-
-test_job:
-  stage: test
-  image: alpine:latest
-  script:
-    - echo "Running tests..."
-    - echo "All tests passed!"
+    - pip install -r requirements.txt
+    - python setup.py build
 ```
 
-### 4. Push code and watch the magic!
+## 🐳 Deployment Configuration
 
-```bash
-git add .
-git commit -m "Add CI config"
-git push
-```
+Add a `docker-compose.yml` to your repository root.
+The system automatically handles versioning by generating a `docker-compose.override.yml` that points to the specific image tag built in the pipeline.
 
-The backend will:
-1. Receive the webhook from GitHub
-2. Clone your repository
-3. Parse the `.gitlab-ci.yml`
-4. Execute each job in Docker containers
-5. Store all logs in the database
+**Automatic Rollback:**
+If a deployment fails (e.g., a container crashes immediately after startup), the system detects the failure and **automatically rolls back** to the last known successful commit.
 
-## Configuration
+**Conflict Handling:**
+The deployment engine automatically handles container name conflicts by cleaning up old containers before starting the new version, ensuring a smooth update process.
 
-### OAuth2 Setup
+---
 
-To enable authentication, you need to create OAuth applications in:
-1. **Google Cloud Console**: Enable Google+ API, create credentials for Web Application.
-   - Authorized redirect URI: `http://localhost:8080/auth/google/callback` (or your production URL)
-2. **GitHub Developer Settings**: Create New OAuth App.
-   - Authorization callback URL: `http://localhost:8080/auth/github/callback` (or your production URL)
+## 📚 Documentation
 
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | `postgres://cicd:cicd_password@localhost:5432/cicd_db?sslmode=disable` |
-| `API_PORT` | Server port | `8080` |
-| `API_URL` | Public URL of the backend (for callbacks) | `http://localhost:8080` |
-| `FRONTEND_URL` | URL of the frontend (for redirects) | `http://localhost:3000` |
-| `JWT_SECRET` | Secret key for signing JWT tokens | `your-secret-key...` |
-| `GOOGLE_CLIENT_ID` | Google OAuth Client ID | - |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth Client Secret | - |
-| `GITHUB_CLIENT_ID` | GitHub OAuth Client ID | - |
-| `GITHUB_CLIENT_SECRET` | GitHub OAuth Client Secret | - |
-
-## API Endpoints
-
-### Authentication
-
-```
-GET /auth/google/login
-GET /auth/github/login
-```
-Redirects to the respective provider for login.
-
-### Webhook
-
-```
-POST /webhook/github
-```
-
-Receives GitHub push events and triggers pipelines.
-
-**Headers:**
-- `X-GitHub-Event: push`
-
-**Response:**
-```json
-{
-  "message": "Pipeline triggered",
-  "branch": "main",
-  "commit": "abc123..."
-}
-```
-
-### Health Check
-
-```
-GET /health
-```
-
-**Response:**
-```json
-{
-  "status": "ok"
-}
-```
-
-## Database Schema
-
-| Table | Description |
-|-------|-------------|
-| `projects` | Repository configurations |
-| `pipelines` | Pipeline execution records |
-| `jobs` | Individual job records within pipelines |
-| `logs` | Line-by-line log storage |
-
-## Supported CI Config
-
-The parser supports a subset of GitLab CI syntax:
-
-```yaml
-stages:
-  - build
-  - test
-  - deploy
-
-job_name:
-  stage: build
-  image: node:18-alpine
-  script:
-    - npm install
-    - npm run build
-```
-
-## Project Structure
-
-```
-.
-├── main.go                 # Entry point - starts API server
-├── internal/
-│   ├── api/
-│   │   ├── server.go       # HTTP server and handlers
-│   │   └── webhook.go      # GitHub webhook payload types
-│   ├── database/
-│   │   └── database.go     # PostgreSQL operations
-│   ├── executor/
-│   │   └── executor.go     # Docker job execution
-│   ├── git/
-│   │   └── git.go          # Git clone operations
-│   ├── models/
-│   │   └── models.go       # Data models
-│   └── parser/
-│       └── parser.go       # YAML config parser
-├── docker-compose.yml      # PostgreSQL + Adminer
-└── init-db.sql             # Database schema
-```
-
-## Stopping the services
-
-```bash
-# Stop database
-docker-compose down
-
-# Stop with data cleanup
-docker-compose down -v
-```
-
-## Testing the webhook manually
-
-```bash
-curl -X POST http://localhost:8080/webhook/github \
-  -H "Content-Type: application/json" \
-  -H "X-GitHub-Event: push" \
-  -d '{
-    "ref": "refs/heads/main",
-    "after": "abc123def456",
-    "deleted": false,
-    "repository": {
-      "name": "test-repo",
-      "full_name": "user/test-repo",
-      "clone_url": "https://github.com/user/test-repo.git"
-    },
-    "head_commit": {
-      "id": "abc123def456",
-      "message": "test commit"
-    }
-  }'
-```
-
-## License
-
-MIT
+For detailed technical architecture and internal workings, please refer to [TECHNICAL_DOCS.md](TECHNICAL_DOCS.md).

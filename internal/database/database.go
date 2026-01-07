@@ -1,8 +1,13 @@
 package database
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -11,10 +16,11 @@ import (
 )
 
 type DB struct {
-	conn *sql.DB
+	conn          *sql.DB
+	encryptionKey string
 }
 
-func New() (*DB, error) {
+func New(encryptionKey string) (*DB, error) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		dbURL = "postgres://cicd:cicd_password@localhost:5432/cicd_db?sslmode=disable"
@@ -35,12 +41,63 @@ func New() (*DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	return &DB{conn: conn}, nil
+	return &DB{
+		conn:          conn,
+		encryptionKey: encryptionKey,
+	}, nil
 }
 
 // Close closes the database connection
 func (db *DB) Close() error {
 	return db.conn.Close()
+}
+
+func (db *DB) Encrypt(text string) (string, error) {
+	if db.encryptionKey == "" {
+		return text, nil
+	}
+	block, err := aes.NewCipher([]byte(db.encryptionKey))
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+	ciphertext := gcm.Seal(nonce, nonce, []byte(text), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+func (db *DB) Decrypt(text string) (string, error) {
+	if db.encryptionKey == "" {
+		return text, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(text)
+	if err != nil {
+		return text, nil // Return raw text if not base64 (migration support)
+	}
+	block, err := aes.NewCipher([]byte(db.encryptionKey))
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return text, nil // Return raw text if too short
+	}
+	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return text, nil // Return raw text if decryption fails (wrong key or not encrypted)
+	}
+	return string(plaintext), nil
 }
 
 // ============== User Operations ==============
@@ -96,19 +153,38 @@ func (db *DB) CreateProject(project *models.NewProject) (*models.Project, error)
 		project.DeploymentFilename = "docker-compose.yml"
 	}
 
+	encAccessToken, err := db.Encrypt(project.AccessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt access token: %w", err)
+	}
+	encSSHPrivateKey, err := db.Encrypt(project.SSHPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt ssh key: %w", err)
+	}
+	encRegistryToken, err := db.Encrypt(project.RegistryToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt registry token: %w", err)
+	}
+
 	query := `
 		INSERT INTO projects (owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, created_at
 	`
 	var p models.Project
-	err := db.conn.QueryRow(query, project.OwnerID, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename,
-		project.SSHHost, project.SSHUser, project.SSHPrivateKey, project.RegistryUser, project.RegistryToken).
+	err = db.conn.QueryRow(query, project.OwnerID, project.Name, project.RepoURL, encAccessToken, project.PipelineFilename, project.DeploymentFilename,
+		project.SSHHost, project.SSHUser, encSSHPrivateKey, project.RegistryUser, encRegistryToken).
 		Scan(&p.ID, &p.OwnerID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
 			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project: %w", err)
 	}
+
+	// Restore plaintext values in returned object
+	p.AccessToken = project.AccessToken
+	p.SSHPrivateKey = project.SSHPrivateKey
+	p.RegistryToken = project.RegistryToken
+
 	return &p, nil
 }
 
@@ -132,6 +208,11 @@ func (db *DB) GetProject(id int) (*models.Project, error) {
 		}
 		return nil, fmt.Errorf("failed to get project: %w", err)
 	}
+
+	// Decrypt sensitive fields
+	p.AccessToken, _ = db.Decrypt(p.AccessToken)
+	p.SSHPrivateKey, _ = db.Decrypt(p.SSHPrivateKey)
+	p.RegistryToken, _ = db.Decrypt(p.RegistryToken)
 
 	variables, err := db.GetVariablesByProject(id)
 	if err == nil {
@@ -170,6 +251,12 @@ func (db *DB) GetAllProjects() ([]models.Project, error) {
 			&p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan project: %w", err)
 		}
+
+		// Decrypt sensitive fields
+		p.AccessToken, _ = db.Decrypt(p.AccessToken)
+		p.SSHPrivateKey, _ = db.Decrypt(p.SSHPrivateKey)
+		p.RegistryToken, _ = db.Decrypt(p.RegistryToken)
+
 		projects = append(projects, p)
 	}
 	return projects, nil
@@ -201,6 +288,12 @@ func (db *DB) GetProjectsForUser(userID int) ([]models.Project, error) {
 			&p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan project: %w", err)
 		}
+
+		// Decrypt sensitive fields
+		p.AccessToken, _ = db.Decrypt(p.AccessToken)
+		p.SSHPrivateKey, _ = db.Decrypt(p.SSHPrivateKey)
+		p.RegistryToken, _ = db.Decrypt(p.RegistryToken)
+
 		projects = append(projects, p)
 	}
 	return projects, nil
@@ -216,6 +309,19 @@ func (db *DB) UpdateProject(id int, project *models.NewProject) (*models.Project
 		project.DeploymentFilename = "docker-compose.yml"
 	}
 
+	encAccessToken, err := db.Encrypt(project.AccessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt access token: %w", err)
+	}
+	encSSHPrivateKey, err := db.Encrypt(project.SSHPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt ssh key: %w", err)
+	}
+	encRegistryToken, err := db.Encrypt(project.RegistryToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt registry token: %w", err)
+	}
+
 	query := `
 		UPDATE projects
 		SET name = $1, repo_url = $2, access_token = $3, pipeline_filename = $4, deployment_filename = $5,
@@ -224,13 +330,19 @@ func (db *DB) UpdateProject(id int, project *models.NewProject) (*models.Project
 		RETURNING id, name, repo_url, access_token, pipeline_filename, deployment_filename, ssh_host, ssh_user, ssh_private_key, registry_user, registry_token, created_at
 	`
 	var p models.Project
-	err := db.conn.QueryRow(query, project.Name, project.RepoURL, project.AccessToken, project.PipelineFilename, project.DeploymentFilename,
-		project.SSHHost, project.SSHUser, project.SSHPrivateKey, project.RegistryUser, project.RegistryToken, id).
+	err = db.conn.QueryRow(query, project.Name, project.RepoURL, encAccessToken, project.PipelineFilename, project.DeploymentFilename,
+		project.SSHHost, project.SSHUser, encSSHPrivateKey, project.RegistryUser, encRegistryToken, id).
 		Scan(&p.ID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
 			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update project: %w", err)
 	}
+
+	// Restore plaintext values in returned object
+	p.AccessToken = project.AccessToken
+	p.SSHPrivateKey = project.SSHPrivateKey
+	p.RegistryToken = project.RegistryToken
+
 	return &p, nil
 }
 
@@ -389,6 +501,31 @@ func (db *DB) GetPipelinesByProject(projectID int) ([]models.Pipeline, error) {
 }
 
 // UpdatePipelineStatus updates the status of a pipeline
+// GetLastSuccessfulPipeline retrieves the last successful pipeline for a project
+func (db *DB) GetLastSuccessfulPipeline(projectID int) (*models.Pipeline, error) {
+	query := `
+		SELECT id, project_id, status, commit_hash, branch, created_at, finished_at
+		FROM pipelines
+		WHERE project_id = $1 AND status = 'success'
+		ORDER BY id DESC
+		LIMIT 1
+	`
+	var p models.Pipeline
+	var finishedAt sql.NullTime
+	err := db.conn.QueryRow(query, projectID).
+		Scan(&p.ID, &p.ProjectID, &p.Status, &p.CommitHash, &p.Branch, &p.CreatedAt, &finishedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get last successful pipeline: %w", err)
+	}
+	if finishedAt.Valid {
+		p.FinishedAt = &finishedAt.Time
+	}
+	return &p, nil
+}
+
 func (db *DB) UpdatePipelineStatus(id int, status string) error {
 	var query string
 	if status == "success" || status == "failed" || status == "cancelled" {
@@ -439,6 +576,32 @@ func (db *DB) GetJob(id int) (*models.Job, error) {
 	var exitCode sql.NullInt64
 	var startedAt, finishedAt sql.NullTime
 	err := db.conn.QueryRow(query, id).
+		Scan(&j.ID, &j.PipelineID, &j.Name, &j.Stage, &j.Image, &j.Status, &exitCode, &startedAt, &finishedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("job not found")
+		}
+		return nil, fmt.Errorf("failed to get job: %w", err)
+	}
+	if exitCode.Valid {
+		j.ExitCode = int(exitCode.Int64)
+	}
+	if startedAt.Valid {
+		j.StartedAt = &startedAt.Time
+	}
+	if finishedAt.Valid {
+		j.FinishedAt = &finishedAt.Time
+	}
+	return &j, nil
+}
+
+// GetJobByName retrieves a job by pipeline ID and name
+func (db *DB) GetJobByName(pipelineID int, name string) (*models.Job, error) {
+	query := `SELECT id, pipeline_id, name, stage, image, status, exit_code, started_at, finished_at FROM jobs WHERE pipeline_id = $1 AND name = $2`
+	var j models.Job
+	var exitCode sql.NullInt64
+	var startedAt, finishedAt sql.NullTime
+	err := db.conn.QueryRow(query, pipelineID, name).
 		Scan(&j.ID, &j.PipelineID, &j.Name, &j.Stage, &j.Image, &j.Status, &exitCode, &startedAt, &finishedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -626,11 +789,13 @@ func (db *DB) CreateDeployment(pipelineID int) (*models.Deployment, error) {
 		RETURNING id, pipeline_id, status, started_at
 	`
 	var d models.Deployment
+	var startedAt time.Time
 	err := db.conn.QueryRow(query, pipelineID).
-		Scan(&d.ID, &d.PipelineID, &d.Status, &d.StartedAt)
+		Scan(&d.ID, &d.PipelineID, &d.Status, &startedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create deployment: %w", err)
 	}
+	d.StartedAt = &startedAt
 	return &d, nil
 }
 
@@ -639,6 +804,8 @@ func (db *DB) UpdateDeploymentStatus(id int, status string) error {
 	var query string
 	if status == "success" || status == "failed" || status == "rolled_back" {
 		query = `UPDATE deployments SET status = $1, finished_at = CURRENT_TIMESTAMP WHERE id = $2`
+	} else if status == "deploying" {
+		query = `UPDATE deployments SET status = $1, started_at = CURRENT_TIMESTAMP WHERE id = $2`
 	} else {
 		query = `UPDATE deployments SET status = $1 WHERE id = $2`
 	}
@@ -653,14 +820,17 @@ func (db *DB) UpdateDeploymentStatus(id int, status string) error {
 func (db *DB) GetDeploymentByPipeline(pipelineID int) (*models.Deployment, error) {
 	query := `SELECT id, pipeline_id, status, started_at, finished_at FROM deployments WHERE pipeline_id = $1`
 	var d models.Deployment
-	var finishedAt sql.NullTime
+	var startedAt, finishedAt sql.NullTime
 	err := db.conn.QueryRow(query, pipelineID).
-		Scan(&d.ID, &d.PipelineID, &d.Status, &d.StartedAt, &finishedAt)
+		Scan(&d.ID, &d.PipelineID, &d.Status, &startedAt, &finishedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil if no deployment found
 		}
 		return nil, fmt.Errorf("failed to get deployment: %w", err)
+	}
+	if startedAt.Valid {
+		d.StartedAt = &startedAt.Time
 	}
 	if finishedAt.Valid {
 		d.FinishedAt = &finishedAt.Time
@@ -704,12 +874,17 @@ func (db *DB) GetDeploymentLogs(pipelineID int) ([]models.DeploymentLog, error) 
 }
 
 func (db *DB) CreateVariable(v *models.Variable) error {
+	encryptedValue, err := db.Encrypt(v.Value)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt variable value: %w", err)
+	}
+
 	query := `
 		INSERT INTO variables (project_id, key, value, is_secret)
 		VALUES ($1, $2, $3, $4)
 		RETURNING id, created_at
 	`
-	return db.conn.QueryRow(query, v.ProjectID, v.Key, v.Value, v.IsSecret).Scan(&v.ID, &v.CreatedAt)
+	return db.conn.QueryRow(query, v.ProjectID, v.Key, encryptedValue, v.IsSecret).Scan(&v.ID, &v.CreatedAt)
 }
 
 func (db *DB) GetVariablesByProject(projectID int) ([]models.Variable, error) {
@@ -730,6 +905,13 @@ func (db *DB) GetVariablesByProject(projectID int) ([]models.Variable, error) {
 		if err := rows.Scan(&v.ID, &v.ProjectID, &v.Key, &v.Value, &v.IsSecret, &v.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan variable: %w", err)
 		}
+
+		decryptedValue, err := db.Decrypt(v.Value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt variable value: %w", err)
+		}
+		v.Value = decryptedValue
+
 		variables = append(variables, v)
 	}
 	return variables, nil
@@ -739,4 +921,22 @@ func (db *DB) DeleteVariable(projectID int, key string) error {
 	query := `DELETE FROM variables WHERE project_id = $1 AND key = $2`
 	_, err := db.conn.Exec(query, projectID, key)
 	return err
+}
+
+func (db *DB) CreatePendingDeployment(pipelineID int) (*models.Deployment, error) {
+	query := `
+		INSERT INTO deployments (pipeline_id, status, started_at)
+		VALUES ($1, 'pending', NULL)
+		RETURNING id, status, started_at
+	`
+	var d models.Deployment
+	var startedAt sql.NullTime
+	err := db.conn.QueryRow(query, pipelineID).Scan(&d.ID, &d.Status, &startedAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create pending deployment: %w", err)
+	}
+	if startedAt.Valid {
+		d.StartedAt = &startedAt.Time
+	}
+	return &d, nil
 }

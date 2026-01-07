@@ -14,7 +14,8 @@ type ComposeConfig struct {
 	Services map[string]interface{} `yaml:"services"`
 }
 
-// ParseServices reads a docker-compose file and returns the list of service names
+// ParseServices reads a docker-compose file and returns the list of buildable service names
+// A service is considered buildable if it has a 'build' context defined
 func ParseServices(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -26,16 +27,21 @@ func ParseServices(path string) ([]string, error) {
 		return nil, fmt.Errorf("failed to parse compose file: %w", err)
 	}
 
-	var services []string
-	for name := range config.Services {
-		services = append(services, name)
+	var buildableServices []string
+	for name, serviceBody := range config.Services {
+		// Check if 'build' key exists
+		if serviceMap, ok := serviceBody.(map[string]interface{}); ok {
+			if _, hasBuild := serviceMap["build"]; hasBuild {
+				buildableServices = append(buildableServices, name)
+			}
+		}
 	}
 
-	return services, nil
+	return buildableServices, nil
 }
 
 // GenerateOverride creates the YAML content for docker-compose.override.yml
-// It enforces standardized image names for all services based on the project, registry and commit hash.
+// It enforces standardized image names for all buildable services based on the project, registry and commit hash.
 // Format: registryUser/project-service:tag
 func GenerateOverride(services []string, registryUser, projectName, tag string) ([]byte, error) {
 	serviceConfig := make(map[string]interface{})
@@ -60,4 +66,28 @@ func GenerateOverride(services []string, registryUser, projectName, tag string) 
 	}
 
 	return yaml.Marshal(override)
+}
+
+// GetContainerNames extracts all hardcoded 'container_name' values from a docker-compose file
+func GetContainerNames(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read compose file: %w", err)
+	}
+
+	var config ComposeConfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse compose file: %w", err)
+	}
+
+	var containerNames []string
+	for _, serviceBody := range config.Services {
+		if serviceMap, ok := serviceBody.(map[string]interface{}); ok {
+			if name, ok := serviceMap["container_name"].(string); ok {
+				containerNames = append(containerNames, name)
+			}
+		}
+	}
+
+	return containerNames, nil
 }
