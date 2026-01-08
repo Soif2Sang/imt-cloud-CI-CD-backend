@@ -314,40 +314,135 @@ func (e *DockerExecutor) DeployCompose(workDir, composeFile, projectName string)
 		}
 	}
 
-	// 4. Health Check
-	time.Sleep(10 * time.Second)
+	// 4. Health Check with polling
+	logs.WriteString("Starting deployment health check...\n")
 
-	// Check if ALL containers in the stack are running
-	cmdHealth := exec.Command("docker", append(baseArgs, "ps", "-q")...)
-	cmdHealth.Dir = workDir
-	outHealth, err := cmdHealth.Output()
+	// First, get expected services from the compose file.
+	cmdServices := exec.Command("docker", append(baseArgs, "config", "--services")...)
+	cmdServices.Dir = workDir
+	outServices, err := cmdServices.Output()
 	if err != nil {
 		performRollback()
-		return logs.String(), fmt.Errorf("health check failed (ps error): %v", err)
+		logs.WriteString(fmt.Sprintf("could not determine services from compose file: %s", string(outServices)))
+		return logs.String(), fmt.Errorf("could not determine services from compose file: %s: %w", string(outServices), err)
 	}
-
-	cids := strings.Split(strings.TrimSpace(string(outHealth)), "\n")
-	allRunning := true
-	for _, cid := range cids {
-		if cid == "" { continue }
-		info, err := e.cli.ContainerInspect(ctx, cid)
-		if err != nil {
-			allRunning = false
-			break
-		}
-		if !info.State.Running || info.State.Restarting {
-			allRunning = false
-			msg := fmt.Sprintf("Container %s is not running (State: %s)\n", info.Name, info.State.Status)
-			logs.WriteString(msg)
-			fmt.Printf(msg)
-			break
+	expectedServices := make(map[string]bool)
+	for _, s := range strings.Split(strings.TrimSpace(string(outServices)), "\n") {
+		if s != "" {
+			expectedServices[s] = true
 		}
 	}
-
-	if !allRunning {
-		performRollback()
-		return logs.String(), fmt.Errorf("deployment failed: one or more services are unhealthy")
+	if len(expectedServices) == 0 {
+		logs.WriteString("No services found in compose file. Assuming success.\n")
+		// Cleanup backups and return success, as there is nothing to check.
+		for name := range backupImages {
+			e.cli.ImageRemove(ctx, name+"-rollback", image.RemoveOptions{})
+		}
+		return logs.String(), nil
 	}
+
+	healthCheckCtx, cancelHealthCheck := context.WithTimeout(ctx, 2*time.Minute) // 2 minutes timeout for health check
+	defer cancelHealthCheck()
+
+	ticker := time.NewTicker(10 * time.Second) // Check every 10 seconds
+	defer ticker.Stop()
+
+	type ComposePsInfo struct {
+		Service string `json:"Service"`
+		State   string `json:"State"`
+		Health  string `json:"Health"`
+	}
+
+	for {
+		select {
+		case <-healthCheckCtx.Done():
+			logs.WriteString("Health check timed out after 2 minutes.\n")
+			performRollback()
+			return logs.String(), fmt.Errorf("deployment failed: health check timed out")
+		case <-ticker.C:
+			cmdHealth := exec.Command("docker", append(baseArgs, "ps", "--all", "--format", "json")...)
+			cmdHealth.Dir = workDir
+			outHealth, err := cmdHealth.Output()
+			if err != nil {
+				logs.WriteString(fmt.Sprintf("Health check 'ps' command failed: %v\n", err))
+				continue // Let's retry, might be transient.
+			}
+
+			serviceStatus := make(map[string]ComposePsInfo)
+			lines := strings.Split(strings.TrimSpace(string(outHealth)), "\n")
+
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+				var info ComposePsInfo
+				if err := json.Unmarshal([]byte(line), &info); err != nil {
+					logs.WriteString(fmt.Sprintf("Failed to parse 'ps' JSON output: %v\nLine: %s\n", err, line))
+					// This is a problem with our check, not deployment. Let's continue and retry.
+					continue
+				}
+				if info.Service != "" {
+					serviceStatus[info.Service] = info
+				}
+			}
+
+			allServicesHealthy := true
+			// Check if all expected services are even present in `ps` output
+			if len(serviceStatus) < len(expectedServices) {
+				logs.WriteString(fmt.Sprintf("Waiting for all services to be created. Found %d, expected %d\n", len(serviceStatus), len(expectedServices)))
+				allServicesHealthy = false
+			} else {
+				for srvName := range expectedServices {
+					status, ok := serviceStatus[srvName]
+					if !ok {
+						// Should not happen due to the length check, but as a safeguard.
+						logs.WriteString(fmt.Sprintf("Service %s not found in 'ps' output, waiting...\n", srvName))
+						allServicesHealthy = false
+						break // from for loop over services
+					}
+
+					switch status.State {
+					case "running":
+						// It's running, now check health.
+						switch status.Health {
+						case "unhealthy":
+							msg := fmt.Sprintf("Service %s is unhealthy.", status.Service)
+							logs.WriteString(msg + "\n")
+							performRollback()
+							return logs.String(), fmt.Errorf("deployment failed: %s", msg)
+						case "starting":
+							logs.WriteString(fmt.Sprintf("Service %s is starting...\n", status.Service))
+							allServicesHealthy = false
+						case "healthy", "":
+							// It's healthy or has no healthcheck. Good.
+						default:
+							// unknown health status
+							logs.WriteString(fmt.Sprintf("Service %s has unknown health status: %s\n", status.Service, status.Health))
+							allServicesHealthy = false
+						}
+					case "exited", "dead":
+						msg := fmt.Sprintf("Service %s has stopped unexpectedly. State: %s", status.Service, status.State)
+						logs.WriteString(msg + "\n")
+						performRollback()
+						return logs.String(), fmt.Errorf("deployment failed: %s", msg)
+					default:
+						// Any other state ("created", "restarting", etc.) means it's not ready yet.
+						logs.WriteString(fmt.Sprintf("Service %s is not running yet. State: %s\n", status.Service, status.State))
+						allServicesHealthy = false
+					}
+
+					if !allServicesHealthy {
+						break // no need to check other services in this tick
+					}
+				}
+			}
+			if allServicesHealthy {
+				logs.WriteString("Deployment successful: All services are running and healthy.\n")
+				goto endHealthCheck
+			}
+		}
+	}
+endHealthCheck:
 
 	// 5. Cleanup Backups
 	for name := range backupImages {

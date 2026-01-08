@@ -19,6 +19,47 @@ import (
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/ssh"
 )
 
+const deployScript = `#!/bin/bash
+set -e # Stop script on first error
+
+# Export variables
+export PN=$1
+export CF=$2
+export OF=$3
+
+# Docker commands
+echo "Tearing down old containers..."
+docker compose -p $PN -f $CF -f $OF down --remove-orphans
+
+echo "Pulling new images..."
+docker compose -p $PN -f $CF -f $OF pull
+
+echo "Starting containers..."
+docker compose -p $PN -f $CF -f $OF up -d --wait
+
+echo "Waiting for stabilization..."
+sleep 5
+
+echo "--- Detailed Health Check ---"
+# Get status of all containers
+INSPECT_OUTPUT=$(docker compose -p $PN -f $CF -f $OF ps -a -q | xargs docker inspect -f '{{.Name}} | Status: {{.State.Status}} | Running: {{.State.Running}} | ExitCode: {{.State.ExitCode}}' 2>/dev/null || true)
+
+echo "$INSPECT_OUTPUT"
+
+# Filter for unhealthy containers (The fix is here: || true)
+FAILED_CONTAINERS=$(echo "$INSPECT_OUTPUT" | grep -v 'Running: true' || true)
+
+if [ -n "$FAILED_CONTAINERS" ]; then
+    echo "--- Deployment Failed: Unhealthy Containers Detected ---"
+    echo "$FAILED_CONTAINERS"
+    echo "--- Logs ---"
+    docker compose -p $PN -f $CF -f $OF logs
+    exit 1
+else
+    echo "--- Health Check Passed ---"
+fi
+`
+
 // runPipeline executes the CI/CD pipeline logic
 // This unifies logic from webhook and manual trigger
 func (s *Server) runPipelineLogic(params models.PipelineRunParams) {
@@ -454,6 +495,8 @@ func (s *Server) deployToEnv(project *models.Project, params models.PipelineRunP
 				log.Printf("Error streaming log to DB: %v", dbErr)
 			}
 		}
+		
+		log.Printf(msg)
 	}
 
 	// Helper for block logging (when we get a big chunk, split it for streaming)
@@ -467,6 +510,8 @@ func (s *Server) deployToEnv(project *models.Project, params models.PipelineRunP
 				logAndStream(line)
 			}
 		}
+		
+		log.Printf(content)
 	}
 
 	// Check if we should use Registry/SSH flow
@@ -535,17 +580,25 @@ func (s *Server) deployToEnv(project *models.Project, params models.PipelineRunP
 
 									// Deploy command
 									// Add /usr/local/bin to PATH for non-interactive shells where docker might not be found
-									// Use -p for project name to avoid conflicts
-									// We use 'down' first to ensure ports are freed and old containers are removed
-									cmd := fmt.Sprintf("export PATH=$PATH:/usr/local/bin:/usr/bin && cd %s && export CF=%s && export OF=%s && export PN=%s",
-										remoteDir, params.DeploymentFilename, overrideFilename, sanitizedRepoName)
-
-									cmd += " && docker compose -p $PN -f $CF -f $OF down --remove-orphans || true"
-									cmd += " && docker compose -p $PN -f $CF -f $OF pull && docker compose -p $PN -f $CF -f $OF up -d --wait && sleep 5 && echo 'Checking container statuses...' && docker compose -p $PN -f $CF -f $OF ps -a && if docker compose -p $PN -f $CF -f $OF ps -a -q | xargs docker inspect -f '{{.Name}}: {{.State.ExitCode}}' | grep -vE ': 0$'; then echo 'Deployment failed: One or more containers exited with error' && docker compose -p $PN -f $CF -f $OF logs && exit 1; fi"
-
-									logAndStream("=== REMOTE DEPLOY LOGS ===")
+									//                                                                        cmd := fmt.Sprintf("export PATH=$PATH:/usr/local/bin:/usr/bin && cd %s && export CF=%s && export OF=%s && export PN=%s && docker compose -p $PN -f $CF -f $OF down --remove-orphans && docker compose -p $PN -f $CF -f $OF pull && docker compose -p $PN -f $CF -f $OF up -d --wait && sleep 5 && echo 'Checking container statuses...' && docker compose -p $PN -f $CF -f $OF ps -a && echo '--- Detailed Health Check ---' && INSPECT_OUTPUT=$(docker compose -p $PN -f $CF -f $OF ps -a -q | xargs docker inspect -f '{{.Name}} | Status: {{.State.Status}} | Running: {{.State.Running}} | ExitCode: {{.State.ExitCode}}' 2>/dev/null || true) && echo \"$INSPECT_OUTPUT\" && FAILED_CONTAINERS=$(echo \"$INSPECT_OUTPUT\" | grep -v 'Running: true') && if [ -n \"$FAILED_CONTAINERS\" ]; then echo '--- Deployment Failed: Unhealthy Containers Detected ---' && echo \"$FAILED_CONTAINERS\" && echo '--- Logs ---' && docker compose -p $PN -f $CF -f $OF logs && exit 1; else echo '--- Health Check Passed ---'; fi",
+									//                                                                                remoteDir, params.DeploymentFilename, overrideFilename, sanitizedRepoName)									
+									// logAndStream("=== REMOTE DEPLOY LOGS ===")
+									// remoteErr := client.RunCommandStream(cmd, func(line string) {
+									// 	logAndStream(line)
+									// })
+									// 
+									// // 1. Upload the script
+									// 
+									client.CopyFile([]byte(deployScript), remoteDir+"/deploy.sh")
+									client.RunCommand("chmod +x " + remoteDir + "/deploy.sh")
+									
+									// 2. Run the script with arguments
+									// Usage: ./deploy.sh [ProjectName] [ComposeFile] [OverrideFile]
+									cmd := fmt.Sprintf("export PATH=$PATH:/usr/local/bin:/usr/bin && cd %s && ./deploy.sh %s %s %s", 
+									    remoteDir, sanitizedRepoName, params.DeploymentFilename, overrideFilename)
+									
 									remoteErr := client.RunCommandStream(cmd, func(line string) {
-										logAndStream(line)
+									    logAndStream(line)
 									})
 
 									if remoteErr != nil {
