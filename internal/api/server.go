@@ -9,7 +9,7 @@ import (
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/database"
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/docker"
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/models"
-	
+
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/pkg/logger"
 )
 
@@ -194,7 +194,7 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	// Check GitHub event type
 	eventType := r.Header.Get("X-GitHub-Event")
 	if eventType != "push" {
-		log.Printf("Ignoring non-push event: %s", eventType)
+		logger.Info("Ignoring non-push event: " + eventType)
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"message": "event ignored"})
 		return
@@ -203,14 +203,14 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	// Parse the push event
 	var pushEvent models.PushEvent
 	if err := json.NewDecoder(r.Body).Decode(&pushEvent); err != nil {
-		log.Printf("Failed to parse webhook payload: %v", err)
+		logger.Error("Failed to parse webhook payload: " + err.Error())
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
 		return
 	}
 
 	// Ignore branch deletions
 	if pushEvent.Deleted {
-		log.Printf("Ignoring branch deletion event")
+		logger.Info("Ignoring branch deletion event")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"message": "deletion ignored"})
 		return
@@ -220,7 +220,7 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	branch := strings.TrimPrefix(pushEvent.Ref, "refs/heads/")
 	commitHash := pushEvent.After
 
-	log.Printf("Received push event for %s on branch %s (commit: %s)",
+	logger.Info("Received push event for %s on branch %s (commit: %s)",
 		pushEvent.Repository.FullName, branch, commitHash[:8])
 
 	// Run pipeline asynchronously
@@ -235,8 +235,6 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		"commit":  commitHash,
 	})
 }
-
-
 
 // findOrCreateProject finds an existing project
 // NOTE: Renamed logic but kept name for compatibility with runner.go for now
@@ -256,5 +254,3 @@ func (s *Server) findOrCreateProject(repo models.Repository) (*models.Project, e
 
 	return nil, fmt.Errorf("project not found for repo: %s", repo.CloneURL)
 }
-
-

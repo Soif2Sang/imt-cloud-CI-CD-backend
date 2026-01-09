@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/api"

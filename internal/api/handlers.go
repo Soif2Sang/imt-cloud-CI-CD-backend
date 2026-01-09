@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -836,7 +837,7 @@ func (s *Server) getJobLogs(w http.ResponseWriter, r *http.Request, projectID, p
 
 	logs, err := s.db.GetLogsByJob(jobID)
 	if err != nil {
-		log.Printf("Failed to get logs: %v", err)
+		logger.Error("Failed to get logs: " + err.Error())
 		respondError(w, http.StatusInternalServerError, "Failed to get logs")
 		return
 	}
