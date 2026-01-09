@@ -11,8 +11,8 @@ import (
 	"os"
 	"time"
 
-	_ "github.com/lib/pq"
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/models"
+	_ "github.com/lib/pq"
 )
 
 type DB struct {
@@ -297,6 +297,34 @@ func (db *DB) GetProjectsForUser(userID int) ([]models.Project, error) {
 		projects = append(projects, p)
 	}
 	return projects, nil
+}
+
+func (db *DB) FindProjectByUrl(url string) (*models.Project, error) {
+	query := `
+		SELECT id, owner_id, name, repo_url, access_token, pipeline_filename, deployment_filename,
+		COALESCE(ssh_host, ''), COALESCE(ssh_user, ''), COALESCE(ssh_private_key, ''),
+		COALESCE(registry_user, ''), COALESCE(registry_token, ''),
+		created_at
+		FROM projects WHERE repo_url = $1
+	`
+	var p models.Project
+	err := db.conn.QueryRow(query, url).
+		Scan(&p.ID, &p.OwnerID, &p.Name, &p.RepoURL, &p.AccessToken, &p.PipelineFilename, &p.DeploymentFilename,
+			&p.SSHHost, &p.SSHUser, &p.SSHPrivateKey, &p.RegistryUser, &p.RegistryToken,
+			&p.CreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("project not found")
+		}
+		return nil, fmt.Errorf("failed to get project: %w", err)
+	}
+
+	// Decrypt sensitive fields
+	p.AccessToken, _ = db.Decrypt(p.AccessToken)
+	p.SSHPrivateKey, _ = db.Decrypt(p.SSHPrivateKey)
+	p.RegistryToken, _ = db.Decrypt(p.RegistryToken)
+
+	return &p, nil
 }
 
 // UpdateProject updates an existing project

@@ -1,23 +1,24 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/database"
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/docker"
-	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/models"
+	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/executor"
 
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/pkg/logger"
 )
 
 // Server represents the API server
 type Server struct {
-	db     *database.DB
-	docker *docker.DockerExecutor
-	port   string
+	db                 *database.DB
+	docker             *docker.DockerExecutor
+	port               string
+	pipelineExecutor   *executor.PipelineExecutor
+	deploymentExecutor *executor.DeploymentExecutor
 }
 
 // NewServer creates a new API server
@@ -27,10 +28,15 @@ func NewServer(db *database.DB, port string) (*Server, error) {
 		return nil, fmt.Errorf("failed to create docker executor: %w", err)
 	}
 
+	pipelineExecutor := executor.NewPipelineExecutor(db, docker)
+	deploymentExecutor := executor.NewDeploymentExecutor(db, docker)
+
 	return &Server{
-		db:     db,
-		docker: docker,
-		port:   port,
+		db:                 db,
+		docker:             docker,
+		port:               port,
+		pipelineExecutor:   pipelineExecutor,
+		deploymentExecutor: deploymentExecutor,
 	}, nil
 }
 
@@ -175,82 +181,4 @@ func (s *Server) routeProjectsSubpath(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondError(w, http.StatusNotFound, "Not found")
-}
-
-// handleHealth is a simple health check endpoint
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-// handleGitHubWebhook handles incoming GitHub push webhooks
-func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Check GitHub event type
-	eventType := r.Header.Get("X-GitHub-Event")
-	if eventType != "push" {
-		logger.Info("Ignoring non-push event: " + eventType)
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"message": "event ignored"})
-		return
-	}
-
-	// Parse the push event
-	var pushEvent models.PushEvent
-	if err := json.NewDecoder(r.Body).Decode(&pushEvent); err != nil {
-		logger.Error("Failed to parse webhook payload: " + err.Error())
-		http.Error(w, "Invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	// Ignore branch deletions
-	if pushEvent.Deleted {
-		logger.Info("Ignoring branch deletion event")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"message": "deletion ignored"})
-		return
-	}
-
-	// Extract branch name from ref (refs/heads/main -> main)
-	branch := strings.TrimPrefix(pushEvent.Ref, "refs/heads/")
-	commitHash := pushEvent.After
-
-	logger.Info("Received push event for %s on branch %s (commit: %s)",
-		pushEvent.Repository.FullName, branch, commitHash[:8])
-
-	// Run pipeline asynchronously
-	go s.runPipelineFromWebhook(pushEvent, branch, commitHash)
-
-	// Respond immediately
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Pipeline triggered",
-		"branch":  branch,
-		"commit":  commitHash,
-	})
-}
-
-// findOrCreateProject finds an existing project
-// NOTE: Renamed logic but kept name for compatibility with runner.go for now
-// It no longer creates projects automatically for security reasons.
-func (s *Server) findOrCreateProject(repo models.Repository) (*models.Project, error) {
-	// Try to find existing project by repo URL
-	projects, err := s.db.GetAllProjects()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, p := range projects {
-		if p.RepoURL == repo.CloneURL {
-			return &p, nil
-		}
-	}
-
-	return nil, fmt.Errorf("project not found for repo: %s", repo.CloneURL)
 }

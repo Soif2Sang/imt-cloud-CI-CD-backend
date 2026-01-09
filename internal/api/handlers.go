@@ -925,3 +925,64 @@ func (s *Server) handleDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusOK, logs)
 }
+
+// === System Handlers ===
+
+// handleHealth is a simple health check endpoint
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// handleGitHubWebhook handles incoming GitHub push webhooks
+func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check GitHub event type
+	eventType := r.Header.Get("X-GitHub-Event")
+	if eventType != "push" {
+		logger.Info("Ignoring non-push event: " + eventType)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"message": "event ignored"})
+		return
+	}
+
+	// Parse the push event
+	var pushEvent models.PushEvent
+	if err := json.NewDecoder(r.Body).Decode(&pushEvent); err != nil {
+		logger.Error("Failed to parse webhook payload: " + err.Error())
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	// Ignore branch deletions
+	if pushEvent.Deleted {
+		logger.Info("Ignoring branch deletion event")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"message": "deletion ignored"})
+		return
+	}
+
+	// Extract branch name from ref (refs/heads/main -> main)
+	branch := strings.TrimPrefix(pushEvent.Ref, "refs/heads/")
+	commitHash := pushEvent.After
+
+	logger.Info("Received push event for %s on branch %s (commit: %s)",
+		pushEvent.Repository.FullName, branch, commitHash[:8])
+
+	// Run pipeline asynchronously
+	go s.runPipelineFromWebhook(pushEvent, branch, commitHash)
+
+	// Respond immediately
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Pipeline triggered",
+		"branch":  branch,
+		"commit":  commitHash,
+	})
+}
