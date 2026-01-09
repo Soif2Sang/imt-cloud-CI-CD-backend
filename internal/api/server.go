@@ -3,25 +3,26 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/database"
-	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/executor"
+	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/docker"
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/models"
+	
+	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/pkg/logger"
 )
 
 // Server represents the API server
 type Server struct {
 	db     *database.DB
-	docker *executor.DockerExecutor
+	docker *docker.DockerExecutor
 	port   string
 }
 
 // NewServer creates a new API server
 func NewServer(db *database.DB, port string) (*Server, error) {
-	docker, err := executor.NewDockerExecutor()
+	docker, err := docker.NewDockerExecutor()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker executor: %w", err)
 	}
@@ -69,29 +70,29 @@ func (s *Server) Start() error {
 	http.HandleFunc("/api/v1/projects", s.AuthMiddleware(s.handleProjects))
 	http.HandleFunc("/api/v1/projects/", s.AuthMiddleware(s.routeProjectsSubpath))
 
-	log.Printf("Starting API server on port %s", s.port)
-	log.Printf("Endpoints:")
-	log.Printf("  - GET    /health")
-	log.Printf("  - POST   /webhook/github")
-	log.Printf("  - GET    /auth/{provider}/login")
-	log.Printf("  - GET    /auth/{provider}/callback")
-	log.Printf("  - GET    /api/v1/projects")
-	log.Printf("  - POST   /api/v1/projects")
-	log.Printf("  - GET    /api/v1/projects/{id}")
-	log.Printf("  - PUT    /api/v1/projects/{id}")
-	log.Printf("  - DELETE /api/v1/projects/{id}")
-	log.Printf("  - GET    /api/v1/projects/{id}/members")
-	log.Printf("  - POST   /api/v1/projects/{id}/members")
-	log.Printf("  - DELETE /api/v1/projects/{id}/members/{userId}")
-	log.Printf("  - GET    /api/v1/projects/{id}/variables")
-	log.Printf("  - POST   /api/v1/projects/{id}/variables")
-	log.Printf("  - DELETE /api/v1/projects/{id}/variables/{key}")
-	log.Printf("  - GET    /api/v1/projects/{id}/pipelines")
-	log.Printf("  - POST   /api/v1/projects/{id}/pipelines")
-	log.Printf("  - GET    /api/v1/projects/{id}/pipelines/{id}")
-	log.Printf("  - GET    /api/v1/projects/{id}/pipelines/{id}/jobs")
-	log.Printf("  - GET    /api/v1/projects/{id}/pipelines/{id}/jobs/{id}")
-	log.Printf("  - GET    /api/v1/projects/{id}/pipelines/{id}/jobs/{id}/logs")
+	logger.Info("Starting API server on port " + s.port)
+	logger.Info("Endpoints:")
+	logger.Info("  - GET    /health")
+	logger.Info("  - POST   /webhook/github")
+	logger.Info("  - GET    /auth/{provider}/login")
+	logger.Info("  - GET    /auth/{provider}/callback")
+	logger.Info("  - GET    /api/v1/projects")
+	logger.Info("  - POST   /api/v1/projects")
+	logger.Info("  - GET    /api/v1/projects/{id}")
+	logger.Info("  - PUT    /api/v1/projects/{id}")
+	logger.Info("  - DELETE /api/v1/projects/{id}")
+	logger.Info("  - GET    /api/v1/projects/{id}/members")
+	logger.Info("  - POST   /api/v1/projects/{id}/members")
+	logger.Info("  - DELETE /api/v1/projects/{id}/members/{userId}")
+	logger.Info("  - GET    /api/v1/projects/{id}/variables")
+	logger.Info("  - POST   /api/v1/projects/{id}/variables")
+	logger.Info("  - DELETE /api/v1/projects/{id}/variables/{key}")
+	logger.Info("  - GET    /api/v1/projects/{id}/pipelines")
+	logger.Info("  - POST   /api/v1/projects/{id}/pipelines")
+	logger.Info("  - GET    /api/v1/projects/{id}/pipelines/{id}")
+	logger.Info("  - GET    /api/v1/projects/{id}/pipelines/{id}/jobs")
+	logger.Info("  - GET    /api/v1/projects/{id}/pipelines/{id}/jobs/{id}")
+	logger.Info("  - GET    /api/v1/projects/{id}/pipelines/{id}/jobs/{id}/logs")
 
 	return http.ListenAndServe(":"+s.port, enableCORS(http.DefaultServeMux))
 }

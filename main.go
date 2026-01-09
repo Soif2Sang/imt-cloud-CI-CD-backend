@@ -2,31 +2,34 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/api"
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/database"
+	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/pkg/logger"
 	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Initialize Logger
+	logger.Init()
+
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using system environment variables")
+		logger.Warn("No .env file found, using system environment variables")
 	}
 
-	fmt.Println("Démarrage du moteur CI/CD...")
+	logger.Info("Démarrage du moteur CI/CD...")
 
 	// Initialize database connection
 	db, err := database.New(os.Getenv("ENCRYPTION_KEY"))
 	if err != nil {
-		log.Printf("Warning: Could not connect to database: %v", err)
-		log.Println("Running without database persistence...")
+		logger.Warn("Warning: Could not connect to database: " + err.Error())
+		logger.Warn("Running without database persistence...")
 		db = nil
 	} else {
 		defer db.Close()
-		log.Println("Connected to database successfully")
+		logger.Info("Connected to database successfully")
 	}
 
 	// Get port from environment or use default
@@ -38,15 +41,17 @@ func main() {
 	// Create and start the API server
 	server, err := api.NewServer(db, port)
 	if err != nil {
-		log.Fatalf("Failed to create server: %v", err)
+		logger.Error("Failed to create server: " + err.Error())
+		os.Exit(1)
 	}
 
-	log.Printf("CI/CD Engine ready!")
-	log.Printf("Webhook endpoint: http://localhost:%s/webhook/github", port)
-	log.Printf("Health check: http://localhost:%s/health", port)
+	logger.Info("CI/CD Engine ready!")
+	logger.Info("Webhook endpoint: http://localhost:" + port + "/webhook/github")
+	logger.Info("Health check: http://localhost:" + port + "/health")
 
 	// Start the server (this blocks)
 	if err := server.Start(); err != nil {
-		log.Fatalf("Server error: %v", err)
+		logger.Error("Server error: " + err.Error())
+		os.Exit(1)
 	}
 }

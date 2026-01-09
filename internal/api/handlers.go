@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/git"
 	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/internal/models"
+	"github.com/Soif2Sang/imt-cloud-CI-CD-backend.git/pkg/logger"
 )
 
 // === Helper Functions ===
@@ -196,7 +196,7 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 
 	projects, err := s.db.GetProjectsForUser(userID)
 	if err != nil {
-		log.Printf("Failed to get projects: %v", err)
+		logger.Error("Failed to get projects: " + err.Error())
 		respondError(w, http.StatusInternalServerError, "Failed to get projects")
 		return
 	}
@@ -231,7 +231,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 
 	project, err := s.db.CreateProject(&newProject)
 	if err != nil {
-		log.Printf("Failed to create project: %v", err)
+		logger.Error("Failed to create project: " + err.Error())
 		respondError(w, http.StatusInternalServerError, "Failed to create project")
 		return
 	}
@@ -262,7 +262,7 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request, projectID in
 	if project.OwnerID != userID {
 		members, err := s.db.GetProjectMembers(projectID)
 		if err != nil {
-			log.Printf("Failed to check membership: %v", err)
+			logger.Error("Failed to check membership: " + err.Error())
 			respondError(w, http.StatusInternalServerError, "Failed to check permissions")
 			return
 		}
@@ -321,7 +321,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, projectID
 
 	project, err := s.db.UpdateProject(projectID, &updateData)
 	if err != nil {
-		log.Printf("Failed to update project: %v", err)
+		logger.Error("Failed to update project: " + err.Error())
 		respondError(w, http.StatusInternalServerError, "Failed to update project")
 		return
 	}
@@ -414,7 +414,7 @@ func (s *Server) listProjectMembers(w http.ResponseWriter, r *http.Request, proj
 
 	members, err := s.db.GetProjectMembers(projectID)
 	if err != nil {
-		log.Printf("Failed to get project members: %v", err)
+		logger.Error("Failed to get project members: " + err.Error())
 		respondError(w, http.StatusInternalServerError, "Failed to get project members")
 		return
 	}
@@ -470,7 +470,7 @@ func (s *Server) inviteMember(w http.ResponseWriter, r *http.Request, projectID 
 	}
 
 	if err := s.db.AddProjectMember(projectID, userToInvite.ID, reqBody.Role); err != nil {
-		log.Printf("Failed to add member: %v", err)
+		logger.Error("Failed to add member: " + err.Error())
 		respondError(w, http.StatusInternalServerError, "Failed to add member")
 		return
 	}
@@ -570,7 +570,7 @@ func (s *Server) listPipelines(w http.ResponseWriter, r *http.Request, projectID
 
 	pipelines, err := s.db.GetPipelinesByProject(projectID)
 	if err != nil {
-		log.Printf("Failed to get pipelines: %v", err)
+		logger.Error("Failed to get pipelines: " + err.Error())
 		respondError(w, http.StatusInternalServerError, "Failed to get pipelines")
 		return
 	}
@@ -606,7 +606,7 @@ func (s *Server) triggerPipeline(w http.ResponseWriter, r *http.Request, project
 	// Get latest commit hash
 	commitHash, err := git.GetRemoteHeadHash(project.RepoURL, reqBody.Branch, project.AccessToken)
 	if err != nil {
-		log.Printf("Failed to get latest commit hash: %v", err)
+		logger.Error("Failed to get latest commit hash: " + err.Error())
 		respondError(w, http.StatusInternalServerError, "Failed to get latest commit hash")
 		return
 	}
@@ -614,7 +614,7 @@ func (s *Server) triggerPipeline(w http.ResponseWriter, r *http.Request, project
 	// Create pipeline record
 	pipeline, err := s.db.CreatePipeline(projectID, reqBody.Branch, commitHash)
 	if err != nil {
-		log.Printf("Failed to create pipeline: %v", err)
+		logger.Error("Failed to create pipeline: " + err.Error())
 		respondError(w, http.StatusInternalServerError, "Failed to create pipeline")
 		return
 	}
@@ -731,7 +731,7 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request, projectID, pip
 
 	jobs, err := s.db.GetJobsByPipeline(pipelineID)
 	if err != nil {
-		log.Printf("Failed to get jobs: %v", err)
+		logger.Error("Failed to get jobs: " + err.Error())
 		respondError(w, http.StatusInternalServerError, "Failed to get jobs")
 		return
 	}
